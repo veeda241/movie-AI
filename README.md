@@ -44,6 +44,8 @@ movie_pipeline/
 	$env:HF_TEXT_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
 	```
 
+Make sure `HF_TOKEN` is set in the same shell session that launches the app. If you open a new terminal, export it again before running Streamlit or the CLI.
+
 `HF_TEXT_MODEL` is optional. If you do not set it, the code defaults to `meta-llama/Meta-Llama-3-8B-Instruct`.
 
 Optional video settings:
