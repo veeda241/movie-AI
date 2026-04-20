@@ -42,7 +42,8 @@ def _read_json_file(file_path: str) -> Any:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        st.warning(f"Failed to parse JSON from packet file '{file_path}': {exc}")
         return None
 
 
