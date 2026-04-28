@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+movie_pipeline/output/
+.venv/
+.streamlit/
+Thumbs.db
+.DS_Store
