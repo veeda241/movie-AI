@@ -56,7 +56,7 @@ Optional video settings:
 	```
 
 If Hugging Face provider credits are unavailable or the routed model cannot return a video, the app automatically writes a local cinematic MP4 fallback so the Streamlit UI still shows playable video.
-That fallback now streams frames through the bundled ffmpeg binary from `imageio-ffmpeg`, so no separate system ffmpeg install is required.
+That fallback now streams frames through the bundled FFmpeg binary from `imageio-ffmpeg`, so no separate system FFmpeg install is required.
 
 ## Run
 
