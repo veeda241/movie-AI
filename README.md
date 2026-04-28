@@ -5,20 +5,21 @@ Python backend for a multiagent movie scene creator that uses Hugging Face text-
 ## Project Layout
 
 ```text
-movie_pipeline/
-├── main.py
-├── agents/
-│   ├── director.py
-│   ├── screenwriter.py
-│   ├── cinematographer.py
-│   ├── editor.py
-│   └── video_organizer.py
-├── pipeline/
-│   ├── orchestrator.py
-│   └── scene_packet.py
-├── video/
-│   └── motif_client.py
-├── output/
+.
+├── movie_pipeline/
+│   ├── main.py
+│   ├── agents/
+│   │   ├── director.py
+│   │   ├── screenwriter.py
+│   │   ├── cinematographer.py
+│   │   ├── editor.py
+│   │   └── video_organizer.py
+│   ├── pipeline/
+│   │   ├── orchestrator.py
+│   │   └── scene_packet.py
+│   ├── video/
+│   │   └── motif_client.py
+│   └── output/
 └── streamlit_app.py
 ```
 
