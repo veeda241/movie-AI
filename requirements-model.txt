@@ -1,0 +1,9 @@
+-r requirements.txt
+accelerate
+diffusers
+peft
+safetensors
+torch
+torchvision
+transformers
+xformers; platform_system != "Windows"

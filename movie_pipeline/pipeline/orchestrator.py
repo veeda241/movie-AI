@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +12,8 @@ from movie_pipeline.agents.director import DirectorAgent
 from movie_pipeline.agents.editor import EditorAgent
 from movie_pipeline.agents.screenwriter import ScreenwriterAgent
 from movie_pipeline.agents.video_organizer import VideoOrganizerAgent
+from movie_pipeline.models.image_client import ImageGenerationClient, seed_from_prompt
+from movie_pipeline.models.prompt_conditioning import build_image_prompt, build_video_prompt
 from movie_pipeline.pipeline.scene_packet import ScenePacket
 from movie_pipeline.video.motif_client import MotifClient
 
@@ -20,6 +23,7 @@ class Orchestrator:
         self.project_root = Path(__file__).resolve().parents[1]
         self.output_dir = self.project_root / "output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.manifest_path = self.output_dir / "sequence_manifest.json"
 
         self.director = DirectorAgent()
         self.screenwriter = ScreenwriterAgent()
@@ -27,6 +31,7 @@ class Orchestrator:
         self.editor = EditorAgent()
         self.video_organizer = VideoOrganizerAgent()
         self.video_client = MotifClient()
+        self.image_client = ImageGenerationClient()
         self.last_organizer_output: dict[str, Any] = {}
 
     def run(
@@ -65,6 +70,7 @@ class Orchestrator:
         self._emit_progress(progress_callback, "[5/6] Building scene packets")
         packets = self._build_scene_packets(context, organizer_output)
         self._emit_progress(progress_callback, f"[5/6] Built {len(packets)} scene packets")
+        self._write_manifest(organizer_output)
         for packet in packets:
             self._write_scene_packet(packet)
 
@@ -83,6 +89,30 @@ class Orchestrator:
         self._emit_progress(progress_callback, "[Done] Pipeline complete")
 
         return packets
+
+    def load_saved_project(self) -> dict[str, Any]:
+        packet_paths = sorted(self.output_dir.glob("scene_*_packet.json"), key=self._scene_number_from_path)
+        scene_packets: list[ScenePacket] = []
+        for packet_path in packet_paths:
+            packet_data = json.loads(packet_path.read_text(encoding="utf-8"))
+            scene_packets.append(ScenePacket(**packet_data))
+
+        organizer_output: dict[str, Any] = {}
+        if self.manifest_path.exists():
+            manifest_data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest_data, dict):
+                raise ValueError("Saved manifest must be a JSON object.")
+            organizer_output = manifest_data
+        elif scene_packets:
+            organizer_output = self._derive_organizer_output(scene_packets)
+
+        self.last_organizer_output = organizer_output
+        return {
+            "scene_packets": scene_packets,
+            "organizer_output": organizer_output,
+            "packet_paths": [str(path) for path in packet_paths],
+            "manifest_path": str(self.manifest_path),
+        }
 
     def _emit_progress(self, progress_callback: Callable[[str], None] | None, message: str) -> None:
         print(message, flush=True)
@@ -142,18 +172,19 @@ class Orchestrator:
             if edit_scene is None:
                 raise ValueError(f"Missing editor output for scene {scene_number}.")
 
-            packets.append(
-                ScenePacket(
-                    scene_number=scene_number,
-                    title=str(sequence_item.get("title", director_scene.get("title", ""))),
-                    mood=str(director_scene.get("mood", "")),
-                    setting=str(director_scene.get("setting", script_scene.get("setting", ""))),
-                    script=dict(script_scene),
-                    shots=list(shots_scene.get("shots", [])),
-                    edit_plan=dict(edit_scene),
-                    video_prompt=str(sequence_item.get("video_prompt", "")),
-                )
+            packet = ScenePacket(
+                scene_number=scene_number,
+                title=str(sequence_item.get("title", director_scene.get("title", ""))),
+                mood=str(director_scene.get("mood", "")),
+                setting=str(director_scene.get("setting", script_scene.get("setting", ""))),
+                script=dict(script_scene),
+                shots=list(shots_scene.get("shots", [])),
+                edit_plan=dict(edit_scene),
+                video_prompt=str(sequence_item.get("video_prompt", "")),
             )
+            packet.image_prompt = build_image_prompt(packet)
+            packet.video_prompt = build_video_prompt(packet)
+            packets.append(packet)
 
         return packets
 
@@ -174,6 +205,39 @@ class Orchestrator:
             encoding="utf-8",
         )
 
+    def _write_manifest(self, organizer_output: dict[str, Any]) -> None:
+        self.manifest_path.write_text(
+            json.dumps(organizer_output, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _derive_organizer_output(self, packets: list[ScenePacket]) -> dict[str, Any]:
+        ordered_packets = sorted(packets, key=lambda item: item.scene_number)
+        return {
+            "sequence": [
+                {
+                    "scene_number": packet.scene_number,
+                    "title": packet.title,
+                    "video_prompt": packet.video_prompt,
+                    "order": index + 1,
+                }
+                for index, packet in enumerate(ordered_packets)
+            ],
+            "final_runtime_sec": float(
+                ordered_packets[-1].edit_plan.get("total_duration_sec", 0.0) if ordered_packets else 0.0
+            ),
+            "style_notes": "Recovered from saved scene packets.",
+        }
+
+    def _scene_number_from_path(self, packet_path: Path) -> int:
+        parts = packet_path.stem.split("_")
+        if len(parts) >= 3:
+            try:
+                return int(parts[1])
+            except ValueError:
+                return 0
+        return 0
+
     def _generate_videos(
         self,
         packets: list[ScenePacket],
@@ -183,7 +247,28 @@ class Orchestrator:
             return
 
         for packet in packets:
+            self._generate_keyframe_for_packet(packet, progress_callback)
             self._generate_video_for_packet(packet, progress_callback)
+
+    def _generate_keyframe_for_packet(
+        self,
+        packet: ScenePacket,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
+        if os.environ.get("GENERATE_KEYFRAMES", "").strip().lower() not in {"1", "true", "yes"}:
+            return
+
+        self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: generating keyframe")
+        try:
+            packet.image_path = self.image_client.generate(
+                packet.image_prompt,
+                packet.scene_number,
+                seed=seed_from_prompt(packet.image_prompt, packet.scene_number),
+            )
+            self._write_scene_packet(packet)
+            self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: saved {packet.image_path}")
+        except Exception as exc:
+            self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: skipped ({exc})")
 
     def _generate_video_for_packet(
         self,

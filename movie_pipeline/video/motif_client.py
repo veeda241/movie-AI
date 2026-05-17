@@ -30,12 +30,14 @@ class MotifClient:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def generate(self, video_prompt: str, scene_number: int) -> str:
+        remote_error: Exception | None = None
         if self.token.strip():
             try:
                 remote_video = self._generate_remote_video(video_prompt, scene_number)
                 if remote_video:
                     return self._write_video_file(scene_number, remote_video)
             except Exception as exc:
+                remote_error = exc
                 print(f"[MotifClient] scene {scene_number} remote video failed: {exc}", flush=True)
         else:
             print(f"[MotifClient] scene {scene_number} missing HF_TOKEN, using local fallback.", flush=True)
@@ -44,7 +46,11 @@ class MotifClient:
             return self._generate_local_video(video_prompt, scene_number)
         except Exception as exc:
             print(f"[MotifClient] scene {scene_number} local fallback failed: {exc}", flush=True)
-            return ""
+            if remote_error is not None:
+                raise RuntimeError(
+                    f"Video generation failed after remote and local attempts: {remote_error}"
+                ) from exc
+            raise RuntimeError(f"Video generation failed in local fallback: {exc}") from exc
 
     def _generate_remote_video(self, video_prompt: str, scene_number: int) -> bytes:
         client = InferenceClient(
