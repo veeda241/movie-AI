@@ -69,6 +69,8 @@ def _render_scene_packet(packet: ScenePacket) -> None:
             st.subheader("Scene Details")
             st.write(f"Mood: {packet.mood}")
             st.write(f"Setting: {packet.setting}")
+            if packet.image_prompt:
+                st.write(f"Image prompt: {packet.image_prompt}")
             st.write(f"Video prompt: {packet.video_prompt}")
 
             if packet.script:
@@ -83,6 +85,11 @@ def _render_scene_packet(packet: ScenePacket) -> None:
 
         with right:
             st.subheader("Media")
+            if packet.image_path and Path(packet.image_path).exists():
+                st.image(packet.image_path, caption=packet.image_path, use_container_width=True)
+            elif packet.image_path:
+                st.warning(f"Image path reported, but file was not found: {packet.image_path}")
+
             if packet.video_path and Path(packet.video_path).exists():
                 st.video(packet.video_path)
                 st.caption(packet.video_path)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +12,8 @@ from movie_pipeline.agents.director import DirectorAgent
 from movie_pipeline.agents.editor import EditorAgent
 from movie_pipeline.agents.screenwriter import ScreenwriterAgent
 from movie_pipeline.agents.video_organizer import VideoOrganizerAgent
+from movie_pipeline.models.image_client import ImageGenerationClient, seed_from_prompt
+from movie_pipeline.models.prompt_conditioning import build_image_prompt, build_video_prompt
 from movie_pipeline.pipeline.scene_packet import ScenePacket
 from movie_pipeline.video.motif_client import MotifClient
 
@@ -27,6 +30,7 @@ class Orchestrator:
         self.editor = EditorAgent()
         self.video_organizer = VideoOrganizerAgent()
         self.video_client = MotifClient()
+        self.image_client = ImageGenerationClient()
         self.last_organizer_output: dict[str, Any] = {}
 
     def run(
@@ -142,18 +146,19 @@ class Orchestrator:
             if edit_scene is None:
                 raise ValueError(f"Missing editor output for scene {scene_number}.")
 
-            packets.append(
-                ScenePacket(
-                    scene_number=scene_number,
-                    title=str(sequence_item.get("title", director_scene.get("title", ""))),
-                    mood=str(director_scene.get("mood", "")),
-                    setting=str(director_scene.get("setting", script_scene.get("setting", ""))),
-                    script=dict(script_scene),
-                    shots=list(shots_scene.get("shots", [])),
-                    edit_plan=dict(edit_scene),
-                    video_prompt=str(sequence_item.get("video_prompt", "")),
-                )
+            packet = ScenePacket(
+                scene_number=scene_number,
+                title=str(sequence_item.get("title", director_scene.get("title", ""))),
+                mood=str(director_scene.get("mood", "")),
+                setting=str(director_scene.get("setting", script_scene.get("setting", ""))),
+                script=dict(script_scene),
+                shots=list(shots_scene.get("shots", [])),
+                edit_plan=dict(edit_scene),
+                video_prompt=str(sequence_item.get("video_prompt", "")),
             )
+            packet.image_prompt = build_image_prompt(packet)
+            packet.video_prompt = build_video_prompt(packet)
+            packets.append(packet)
 
         return packets
 
@@ -183,7 +188,28 @@ class Orchestrator:
             return
 
         for packet in packets:
+            self._generate_keyframe_for_packet(packet, progress_callback)
             self._generate_video_for_packet(packet, progress_callback)
+
+    def _generate_keyframe_for_packet(
+        self,
+        packet: ScenePacket,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
+        if os.environ.get("GENERATE_KEYFRAMES", "").strip().lower() not in {"1", "true", "yes"}:
+            return
+
+        self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: generating keyframe")
+        try:
+            packet.image_path = self.image_client.generate(
+                packet.image_prompt,
+                packet.scene_number,
+                seed=seed_from_prompt(packet.image_prompt, packet.scene_number),
+            )
+            self._write_scene_packet(packet)
+            self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: saved {packet.image_path}")
+        except Exception as exc:
+            self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: skipped ({exc})")
 
     def _generate_video_for_packet(
         self,

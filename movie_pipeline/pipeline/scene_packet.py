@@ -14,6 +14,8 @@ class ScenePacket:
     shots: list[Any]
     edit_plan: dict[str, Any]
     video_prompt: str
+    image_prompt: str = ""
+    image_path: str = ""
     video_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:

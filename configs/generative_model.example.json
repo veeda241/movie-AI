@@ -1,0 +1,21 @@
+{
+  "image": {
+    "architecture": "latent diffusion",
+    "text_encoder": "CLIP/T5 from pretrained model",
+    "vae": "pretrained SDXL VAE",
+    "backbone": "U-Net for SDXL, DiT for Flux or SD3-style models",
+    "scheduler": "DPM-Solver++",
+    "fine_tuning": "LoRA or DreamBooth"
+  },
+  "video": {
+    "architecture": "temporal diffusion or video DiT",
+    "temporal_layers": "temporal attention over frame tokens",
+    "training_strategy": "freeze spatial image layers, train temporal adapters or LoRA",
+    "starter_models": [
+      "AnimateDiff",
+      "CogVideoX-5B",
+      "Wan-AI/Wan2.2-T2V-A14B",
+      "Motif-Video-2B"
+    ]
+  }
+}

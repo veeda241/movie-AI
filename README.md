@@ -38,6 +38,12 @@ Python backend for a multiagent movie scene creator that uses Hugging Face text-
 	python -m pip install -r requirements.txt
 	```
 
+   Optional local diffusion/image training dependencies:
+
+	```powershell
+	python -m pip install -r requirements-model.txt
+	```
+
 4. Set the required environment variables in PowerShell:
 
 	```powershell
@@ -55,6 +61,20 @@ Optional video settings:
 	$env:HF_VIDEO_PROVIDER = "fal-ai"
 	$env:HF_VIDEO_MODEL = "Wan-AI/Wan2.2-T2V-A14B"
 	```
+
+Optional image/keyframe settings:
+
+	```powershell
+	$env:GENERATE_KEYFRAMES = "true"
+	$env:IMAGE_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
+	$env:IMAGE_VAE_ID = "madebyollin/sdxl-vae-fp16-fix"
+	$env:IMAGE_STEPS = "30"
+	$env:IMAGE_GUIDANCE = "6.5"
+	```
+
+When `GENERATE_KEYFRAMES` is enabled, each `ScenePacket` gets an `image_prompt` and a generated
+`image_path` before video rendering. Video generation still uses the Hugging Face routed model first
+and falls back to a local MP4 renderer if remote generation is unavailable.
 
 If Hugging Face provider credits are unavailable or the routed model cannot return a video, the app automatically writes a local cinematic MP4 fallback so the Streamlit UI still shows playable video.
 That fallback now streams frames through the bundled FFmpeg binary from `imageio-ffmpeg`, so no separate system FFmpeg install is required.
@@ -82,3 +102,22 @@ If the shell is using the wrong interpreter, run the dashboard through the repos
 The dashboard shows scene cards, the organizer manifest, a live Agent Processing panel, raw packet JSON, and inline MP4 previews when video files are available.
 
 Generated scene packets and video stubs are written to `movie_pipeline/output`.
+
+## Generative Model Layer
+
+The repo now separates the model architecture choices from the agent pipeline:
+
+- `movie_pipeline/models/generative_config.py` defines image, video, and LoRA fine-tuning configs.
+- `movie_pipeline/models/prompt_conditioning.py` converts Director/Cinematographer/Editor outputs into image and video conditioning prompts.
+- `movie_pipeline/models/image_client.py` runs SDXL through Hugging Face Diffusers when optional model dependencies are installed.
+- `configs/generative_model.example.json` documents the intended text encoder, VAE, denoising backbone, scheduler, and temporal-video strategy.
+
+For fine-tuning, start with LoRA rather than base-model training:
+
+	```powershell
+	python scripts/print_lora_command.py --dataset-dir data/images --steps 1200 --rank 16
+	```
+
+Use the printed command with the official Diffusers SDXL LoRA training script. For video, the practical path is to
+freeze the image backbone and fine-tune temporal adapters or LoRA layers on top of AnimateDiff, CogVideoX, Wan, or
+your Motif-Video target.
