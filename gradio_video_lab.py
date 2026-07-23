@@ -16,10 +16,13 @@ try:
 except Exception:
     pass
 
-# Ensure pure-Python _regex shim is in place (bypasses Windows DLL policy).
-from video_lab.utils.regex_shim import ensure_regex_shim
+# Ensure pure-Python _regex shim when Windows blocks the native regex DLL.
+try:
+    from video_lab.utils.regex_shim import ensure_regex_shim
 
-ensure_regex_shim()
+    ensure_regex_shim()
+except Exception:
+    pass
 
 from video_lab.app import main
 

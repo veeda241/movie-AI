@@ -11,15 +11,29 @@ Thumbs.db
 web/node_modules/
 web/.next/
 web/out/
+
+# Video Lab local data / weights (regenerate via scripts)
 data/video_lab/raw/
 data/video_lab/processed/
 data/video_lab/smoke/
 data/video_lab/manifest.jsonl
+data/video_lab/manifest_hf_wan.jsonl
 data/video_lab/pexels_index.jsonl
 data/video_lab/hf_wan_index.jsonl
 outputs/video_lab/
+ckpts/
+data/movie_ai_train/
+video_lab/movie_ai_train/
+
+# Weights / media / tool junk
 *.pt
 *.safetensors
 *.mp4
 *.webm
+*.zip
+*.exe
+gh-cli/
+gh.zip
+movie-AI-lab/
+
 .cursor/

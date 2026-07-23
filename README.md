@@ -1,248 +1,116 @@
-# Movie-AI / Movie Flow
+# Movie-AI
 
-Two products in one repo:
+Two clear apps in one repo. They share code but **do not share the same video model**.
 
-1. **Movie Flow** — a Google Flow–style creative studio (image, video, multi-agent movie) with a Next.js UI and FastAPI backend.
-2. **Own Video Model Lab** — a Gradio R&D bench to train and test **our own** VAE + DiT video model (no Hugging Face / CogVideoX in that UI).
+| App | What it is | Run | Port |
+|-----|------------|-----|------|
+| **Movie Flow** | Product studio (image / video / multi-agent movie) | API + Next.js | `8000` + `3000` |
+| **Own Video Model Lab** | Research bench to train **your** VAE+DiT | Gradio | `7860` |
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│  Movie Flow (product)                                       │
-│  web/ (Next.js :3000)  →  api/ (FastAPI :8000)              │
-│                           → movie_pipeline/ (agents + gen)  │
-│  streamlit_app.py (ops monitor)                             │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│  Own Video Model Lab (research)                             │
-│  gradio_video_lab.py → video_lab/ (:7860)                   │
-│  Data → Labels → Train VAE/DiT → Generate                   │
-└─────────────────────────────────────────────────────────────┘
+Movie Flow:     web (:3000) → api (:8000) → movie_pipeline (Wan remote or local fallback)
+Own Model Lab:  gradio_video_lab.py (:7860) → video_lab/ (local VAE + DiT train/generate)
 ```
 
-They share the repo but run on **different ports**. The lab does **not** automatically power Movie Flow video yet.
-
 ---
 
-## What each part does
-
-| Piece | Path | Purpose |
-|--------|------|---------|
-| Product UI | `web/` | Landing, login, Create studio, projects, billing, team |
-| SaaS API | `api/` | Auth (JWT), credits, projects, jobs, Stripe, orgs |
-| Engine | `movie_pipeline/` | Multi-agent movie planning + image/video generation |
-| Ops | `streamlit_app.py` | Simple monitor against the API |
-| Own model lab | `video_lab/` + `gradio_video_lab.py` | Train/test local Causal VAE + Spatiotemporal DiT |
-| Docs | `docs/` | Lab guide + manual feature checklist |
-| Data (lab) | `data/video_lab/` | Raw clips, smoke clips, `manifest.jsonl` |
-| Outputs (lab) | `outputs/video_lab/` | VAE/DiT checkpoints + sample MP4s |
-| Storage (product) | `storage/` | Local DB / assets for Movie Flow |
-
----
-
-## Prerequisites
-
-- Python 3.10+
-- Node.js 18+ (for the web app)
-- Optional: NVIDIA GPU + CUDA PyTorch (much faster for the video lab)
-
----
-
-## Setup (once)
+## Fresh machine setup
 
 ```powershell
-cd C:\hackathon\Gemini_CLI\movie-AI
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+git clone -b feature/video-lab-own-model https://github.com/veeda241/movie-AI.git
+cd movie-AI
+
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -U pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Edit `.env` as needed. **`HF_TOKEN` is optional** for Movie Flow remote LLM/video; without it, the pipeline uses local planning + cinematic fallbacks.
+Edit `.env` (`HF_TOKEN`, `PEXELS_API_KEY` as needed).
 
-For the video lab also install:
+### Own Video Model Lab (extra)
 
 ```powershell
-python -m pip install -r requirements-video-lab.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-video-lab.txt
+# GPU recommended:
+# .\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
-GPU (recommended for training/generate):
+### Optional CogVideo LoRA (experimental only)
 
 ```powershell
-python -m pip uninstall -y torch torchvision
-python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+.\.venv\Scripts\python.exe -m pip install -r requirements-cogvideo.txt
 ```
 
 ---
 
-## 1) Movie Flow — product studio
-
-### Start API
+## Run Movie Flow (product)
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
-```
+# Terminal 1 — API
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
-### Start web
-
-```powershell
+# Terminal 2 — Web
 cd web
 copy .env.local.example .env.local
 npm install
 npm run dev
 ```
 
-Open **http://localhost:3000** → register → use **Create** for Image / Video / Movie.
+Open http://localhost:3000
 
-### Modes
-
-- **Image** — still generation (credits)
-- **Video** — short clip generation
-- **Movie** — multi-agent pipeline (script → shots → clips → assemble)
-
-### Ops monitor (optional)
-
-```powershell
-$env:MOVIE_FLOW_API_URL = "http://127.0.0.1:8000"
-python -m streamlit run streamlit_app.py
-```
-
-### Offline CLI pipeline
-
-```powershell
-python movie_pipeline/main.py
-```
-
-### Product features (summary)
-
-- Auth + **credits** (signup grant; image / video / movie costs differ)
-- Projects, assets, ZIP export
-- Billing (Stripe when keys set; demo upgrade otherwise)
-- Teams / orgs / invites
-- Pricing: Starter / Pro / Enterprise
+Ops monitor (optional): `.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py`
 
 ---
 
-## 2) Own Video Model Lab — research
-
-This is where you build **our** model (not Veo, not CogVideoX in the UI).
+## Run Own Video Model Lab
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python gradio_video_lab.py
+.\.venv\Scripts\python.exe gradio_video_lab.py
 ```
 
-Open **http://127.0.0.1:7860**
+Open http://127.0.0.1:7860
 
-### Tabs (workflow)
+### Lab workflow
 
-| Tab | What you do |
-|-----|-------------|
-| **Checklist** | Live ✅/⬜ — YOU vs LAB (Phase A data + Phase B architecture) |
-| **Data** | Smoke / curate with **optical-flow** gates → **Recaption** for `dense_caption` |
-| **Labels** | Edit caption / camera / lighting / motion / aesthetic / tags |
-| **Train** | Curriculum Stage 1/2/3 + aspect bucket → Train VAE → Train DiT |
-| **Generate** | Prompt → MP4 from local checkpoints |
+1. **Data** — download Pexels / HF Wan actions, or drop MP4s into `data/video_lab/raw/` → Curate → Recaption  
+2. **Labels** — fix captions  
+3. **Train** — VAE then DiT (`niche_laptop` on 6GB GPUs)  
+4. **Generate** — prompts in your training niche; match train resolution/frames  
 
-### Manual data you should add
+CLI train:
 
-1. Put real MP4/WebM into `data/video_lab/raw/` **or** download from [Pexels](https://www.pexels.com) (Videos provided by Pexels):
-   - Add `PEXELS_API_KEY=` to `.env` ([free key](https://www.pexels.com/api/))
-   - `python scripts/download_pexels.py --query "ocean waves" --count 200`
-   - Or Gradio **Data → Download from Pexels**
-2. **Data → Curate raw → manifest**
-3. **Labels** / **Recaption**, then Train
-
-Example row:
-
-```json
-{
-  "path": "C:/hackathon/Gemini_CLI/movie-AI/data/video_lab/raw/my_clip.mp4",
-  "caption": "neon city street at night, wet asphalt, slow dolly forward",
-  "camera": "dolly forward",
-  "lighting": "neon night",
-  "motion": "camera push-in, light rain",
-  "aesthetic": 8,
-  "tags": ["city", "rain", "cinematic"],
-  "negative": "watermark, shaky blur, logos",
-  "fps": 24,
-  "frames": 48
-}
+```powershell
+.\.venv\Scripts\python.exe scripts\download_hf_wan_actions.py
+.\.venv\Scripts\python.exe scripts\train_niche.py --profile niche_laptop --vae-steps 3000 --dit-steps 18000
 ```
 
-Full checklist: [docs/OWN_MODEL_CHECKLIST.md](docs/OWN_MODEL_CHECKLIST.md)  
-Lab details: [docs/VIDEO_MODEL_LAB.md](docs/VIDEO_MODEL_LAB.md)  
-Niche 256–512p / 24GB: [docs/NICHE_TRAINING.md](docs/NICHE_TRAINING.md) (`scripts/train_niche.py`)
+Checkpoints: `outputs/video_lab/vae/`, `outputs/video_lab/dit/`  
+Samples: `outputs/video_lab/samples/`
 
-### Honest expectations
-
-- Smoke/toy training → abstract color motion (not photoreal Veo quality)
-- Competing with commercial models needs **lots of real clips + longer GPU training + larger nets**
-- RTX 3050-class GPUs are fine for research; not for Veo-scale training
+Docs: [docs/VIDEO_MODEL_LAB.md](docs/VIDEO_MODEL_LAB.md) · [docs/NICHE_TRAINING.md](docs/NICHE_TRAINING.md) · [docs/OWN_MODEL_CHECKLIST.md](docs/OWN_MODEL_CHECKLIST.md)
 
 ---
 
-## Repo map (quick)
+## Honest expectations
+
+- Lab quality ≈ your data + GPU time. ~hundreds of niche clips ≠ Wan/Veo.  
+- Movie Flow video uses **remote Wan** (needs `HF_TOKEN`) or a **local cinematic fallback** — not the lab DiT.  
+- Gradio tab **Experimental (CogVideo LoRA)** is optional and separate from own VAE/DiT.
+
+---
+
+## Repo map
 
 ```text
-movie-AI/
-├── api/                 # FastAPI SaaS
-├── web/                 # Next.js product UI
-├── movie_pipeline/      # Agents + Motif/image clients
-├── video_lab/           # Own VAE/DiT models, train, infer, Gradio app
-├── data/video_lab/      # Lab datasets + manifest.jsonl
-├── outputs/video_lab/   # Checkpoints + samples
-├── docs/                # OWN_MODEL_CHECKLIST, VIDEO_MODEL_LAB
-├── storage/             # Product DB / files
-├── gradio_video_lab.py  # Launch lab UI
-├── streamlit_app.py     # Ops monitor
-├── requirements.txt
-├── requirements-video-lab.txt
-└── .env.example
+api/              Movie Flow FastAPI
+web/              Movie Flow Next.js UI
+movie_pipeline/   Agents + Motif video client
+video_lab/        Own VAE/DiT + Gradio app
+gradio_video_lab.py
+streamlit_app.py
+scripts/          download_*, train_niche, train_lora
+docs/
+data/video_lab/   raw clips + manifests (local; not in git)
+outputs/video_lab/ checkpoints + samples (local; not in git)
 ```
-
----
-
-## Environment variables
-
-See [`.env.example`](.env.example).
-
-| Area | Vars |
-|------|------|
-| Optional remote models | `HF_TOKEN`, `HF_TEXT_MODEL`, `HF_VIDEO_*` |
-| API | `JWT_SECRET`, `DATABASE_URL`, `STORAGE_ROOT`, `CORS_ORIGINS` |
-| Billing | `STRIPE_*` |
-| Web | `web/.env.local` → API base URL |
-
----
-
-## Optional: SDXL keyframes (movie pipeline)
-
-```powershell
-python -m pip install -r requirements-model.txt
-$env:GENERATE_KEYFRAMES = "true"
-```
-
-Uses SDXL for keyframes when GPU/deps allow; otherwise local stills.
-
----
-
-## Typical day
-
-**Use the product**
-
-1. Start API (`:8000`) + web (`:3000`)
-2. Register → Create Image/Video/Movie
-
-**Improve our video model**
-
-1. Start Gradio (`:7860`)
-2. Checklist → add clips → Labels → Train VAE → Train DiT → Generate
-3. Restart Gradio after code changes
-
----
-
-## License
-
-See [LICENSE](LICENSE).

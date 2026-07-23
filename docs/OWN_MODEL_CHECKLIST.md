@@ -22,11 +22,11 @@ Open Gradio **Checklist** for live ✅/⬜. This file mirrors the same list.
 | **LAB** | Curriculum Stage 1 / 2 / 3 | Train stage radio |
 | **LAB** | Generate sample | Generate tab |
 
-## Phase C — deferred
+## Phase C — optional / later
 
+- Experimental CogVideoX LoRA (Gradio tab; separate from own VAE/DiT)  
 - Video DPO / RLAIF  
 - CFG / step distillation  
-- Open SOTA backbone as primary engine  
 - Multi-million clip ingest  
 
 ## Example manifest row

@@ -322,13 +322,17 @@ def build_app() -> gr.Blocks:
     device = get_device()
     bucket_choices = list_bucket_labels()
     stage_choices = list_stage_labels()
-    with gr.Blocks(title="Movie Flow — Own Video Model Lab") as demo:
+    with gr.Blocks(title="Own Video Model Lab") as demo:
         gr.Markdown(
             f"""
 # Own Video Model Lab
-**Phase A** data density (flow filter, dense captions, aspect buckets) → **Phase B** stronger causal VAE + spacetime-patch DiT.
+Train and test **our local** Causal VAE + DiT (research bench).
 
-Device: `{device}` · Start on **Checklist**.
+**Main path:** Data → Labels → Train (VAE then DiT) → Generate  
+**Not Movie Flow:** this UI does not power the product studio on port 3000.  
+**Not Wan/Veo:** quality matches what you train (niche clips), not commercial models.
+
+Device: `{device}`
 """
         )
 
@@ -367,10 +371,10 @@ Device: `{device}` · Start on **Checklist**.
                     steps = gr.Slider(4, 50, value=24, step=1, label="Diffusion steps (per chunk)")
                     seed = gr.Number(value=0, label="Seed", precision=0)
                 gr.Markdown(
-                    "This lab model only knows what it was **trained** on (currently ocean/Pexels niche). "
-                    "Wan-style prompts (astronauts, cyberpunk, 8K) will not work. "
-                    "Best: **Duration ~0.7s** (8 frames @ 12fps), **Resolution 256**, ocean-wave prompts. "
-                    "Longer clips are stitched chunks for VRAM, not a bigger model."
+                    "Generate from **your last Train checkpoints** (`outputs/video_lab/`). "
+                    "Match **resolution/frames** to training (e.g. 256², ~0.7s @ 12fps for niche_laptop). "
+                    "Use prompts in your training niche (ocean, blinking, pouring liquid, …). "
+                    "Longer durations only stitch short chunks — they do not unlock Wan-level quality."
                 )
                 gen_btn = gr.Button("Generate Video", variant="primary", size="lg")
                 video_out = gr.Video(label="Generated video", height=360)
@@ -509,16 +513,13 @@ Device: `{device}` · Start on **Checklist**.
                     outputs=[train_log, ckpt_box],
                 )
 
-            with gr.Tab("Fine-tune"):
+            with gr.Tab("Experimental (CogVideo LoRA)"):
                 gr.Markdown(
-                    "# CogVideoX-5B LoRA Fine-tune\n\n"
-                    "Fine-tune the pre-trained CogVideoX-5B model on your HF Wan action clips "
-                    "using LoRA (Low-Rank Adaptation). This is much lighter than full fine-tuning "
-                    "and runs on 16GB VRAM.\n\n"
-                    "**Workflow:**\n"
-                    "1. Build manifest (clips must be in `data/video_lab/raw/`)\n"
-                    "2. Click **Train LoRA** — the model downloads on first run (~10GB)\n"
-                    "3. After training, use **Generate with LoRA** to test\n"
+                    "### Optional — not the own-model path\n\n"
+                    "This tab fine-tunes **Hugging Face CogVideoX-5B** with LoRA on your clips. "
+                    "It is separate from Train VAE/DiT above. Needs lots of VRAM/disk "
+                    "(`pip install -r requirements-cogvideo.txt`).\n\n"
+                    "**Workflow:** Build manifest → Train LoRA → Generate with LoRA.\n"
                 )
 
                 with gr.Row():
