@@ -5,8 +5,10 @@ from typing import Any
 
 try:
     from movie_pipeline.agents.base import call_hf_json
-except ImportError:  # pragma: no cover - direct execution fallback
+    from movie_pipeline.agents.local_plan import has_hf_token, local_cinematographer_shots
+except ImportError:  # pragma: no cover
     from agents.base import call_hf_json
+    from agents.local_plan import has_hf_token, local_cinematographer_shots
 
 
 class CinematographerAgent:
@@ -20,13 +22,19 @@ class CinematographerAgent:
         for scene in screenwriter_output:
             if not isinstance(scene, dict):
                 raise TypeError("Each screenwriter scene must be a dictionary.")
-
             shot_lists.append(self._run_scene(scene))
 
         return shot_lists
 
     def _run_scene(self, scene: dict[str, Any]) -> dict[str, Any]:
         scene_number = int(scene.get("scene_number", 0))
+        if not has_hf_token():
+            print(
+                f"[CinematographerAgent] HF_TOKEN missing — local shots for scene {scene_number}.",
+                flush=True,
+            )
+            return local_cinematographer_shots(scene)
+
         prompt = (
             "You are a cinematographer. Given this single scene script: "
             f"{json.dumps(scene, ensure_ascii=False, separators=(',', ':'))}, produce a shot list for the scene. "

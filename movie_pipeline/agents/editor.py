@@ -5,8 +5,10 @@ from typing import Any
 
 try:
     from movie_pipeline.agents.base import call_hf_json
-except ImportError:  # pragma: no cover - direct execution fallback
+    from movie_pipeline.agents.local_plan import has_hf_token, local_editor_plans
+except ImportError:  # pragma: no cover
     from agents.base import call_hf_json
+    from agents.local_plan import has_hf_token, local_editor_plans
 
 
 class EditorAgent:
@@ -27,6 +29,10 @@ class EditorAgent:
             raise TypeError("EditorAgent expected a list of script blocks.")
         if not isinstance(cinematographer_output, list):
             raise TypeError("EditorAgent expected a list of shot lists.")
+
+        if not has_hf_token():
+            print("[EditorAgent] HF_TOKEN missing — using local edit plans.", flush=True)
+            return local_editor_plans(director_output, cinematographer_output)
 
         prompt = (
             "You are a film editor. Given director notes: "

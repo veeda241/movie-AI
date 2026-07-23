@@ -24,24 +24,33 @@ class MotifClient:
     LOCAL_FPS = int(os.environ.get("HF_LOCAL_VIDEO_FPS", "24"))
     LOCAL_DURATION_SECONDS = int(os.environ.get("HF_LOCAL_VIDEO_SECONDS", "4"))
 
-    def __init__(self) -> None:
+    def __init__(self, output_dir: Path | None = None) -> None:
         self.token = os.environ.get("HF_TOKEN", "")
-        self.output_dir = Path(__file__).resolve().parents[1] / "output"
+        self.output_dir = Path(output_dir) if output_dir is not None else Path(__file__).resolve().parents[1] / "output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def generate(self, video_prompt: str, scene_number: int) -> str:
+    def generate(
+        self,
+        video_prompt: str,
+        scene_number: int,
+        *,
+        output_path: str | Path | None = None,
+    ) -> str:
+        target = Path(output_path) if output_path is not None else self.output_dir / f"scene_{scene_number}_video.mp4"
+        target.parent.mkdir(parents=True, exist_ok=True)
+
         if self.token.strip():
             try:
                 remote_video = self._generate_remote_video(video_prompt, scene_number)
                 if remote_video:
-                    return self._write_video_file(scene_number, remote_video)
+                    return self._write_video_file(target, remote_video)
             except Exception as exc:
                 print(f"[MotifClient] scene {scene_number} remote video failed: {exc}", flush=True)
         else:
             print(f"[MotifClient] scene {scene_number} missing HF_TOKEN, using local fallback.", flush=True)
 
         try:
-            return self._generate_local_video(video_prompt, scene_number)
+            return self._generate_local_video(video_prompt, scene_number, target)
         except Exception as exc:
             print(f"[MotifClient] scene {scene_number} local fallback failed: {exc}", flush=True)
             return ""
@@ -68,12 +77,12 @@ class MotifClient:
 
         raise RuntimeError(f"Unexpected remote video response type: {type(video).__name__}")
 
-    def _write_video_file(self, scene_number: int, video_bytes: bytes) -> str:
-        out_path = self.output_dir / f"scene_{scene_number}_video.mp4"
+    def _write_video_file(self, out_path: Path, video_bytes: bytes) -> str:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(video_bytes)
         return str(out_path)
 
-    def _generate_local_video(self, video_prompt: str, scene_number: int) -> str:
+    def _generate_local_video(self, video_prompt: str, scene_number: int, out_path: Path) -> str:
         import imageio_ffmpeg
 
         seed = self._seed_from_text(video_prompt, scene_number)
@@ -82,7 +91,7 @@ class MotifClient:
         frame_count = self.LOCAL_FPS * self.LOCAL_DURATION_SECONDS
         font_title = self._load_font(28)
         font_body = self._load_font(18)
-        out_path = self.output_dir / f"scene_{scene_number}_video.mp4"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         command = [

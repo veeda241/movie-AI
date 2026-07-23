@@ -1,123 +1,248 @@
-# movie-AI
+# Movie-AI / Movie Flow
 
-Python backend for a multiagent movie scene creator that uses Hugging Face text-generation models for scene planning and a routed video pipeline with a local MP4 fallback for scene playback.
+Two products in one repo:
 
-## Project Layout
+1. **Movie Flow** — a Google Flow–style creative studio (image, video, multi-agent movie) with a Next.js UI and FastAPI backend.
+2. **Own Video Model Lab** — a Gradio R&D bench to train and test **our own** VAE + DiT video model (no Hugging Face / CogVideoX in that UI).
 
 ```text
-.
-├── movie_pipeline/
-│   ├── main.py
-│   ├── agents/
-│   │   ├── director.py
-│   │   ├── screenwriter.py
-│   │   ├── cinematographer.py
-│   │   ├── editor.py
-│   │   └── video_organizer.py
-│   ├── pipeline/
-│   │   ├── orchestrator.py
-│   │   └── scene_packet.py
-│   ├── video/
-│   │   └── motif_client.py
-│   └── output/
-└── streamlit_app.py
+┌─────────────────────────────────────────────────────────────┐
+│  Movie Flow (product)                                       │
+│  web/ (Next.js :3000)  →  api/ (FastAPI :8000)              │
+│                           → movie_pipeline/ (agents + gen)  │
+│  streamlit_app.py (ops monitor)                             │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  Own Video Model Lab (research)                             │
+│  gradio_video_lab.py → video_lab/ (:7860)                   │
+│  Data → Labels → Train VAE/DiT → Generate                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Setup
+They share the repo but run on **different ports**. The lab does **not** automatically power Movie Flow video yet.
 
-1. Clone the repository.
-2. On Windows, activate the repository virtual environment before running commands:
-	```powershell
-	.\.venv\Scripts\Activate.ps1
-	```
+---
 
-   If you prefer not to activate it, use `.\.venv\Scripts\python.exe` in the commands below.
-3. Install dependencies from the repository root:
+## What each part does
 
-	```powershell
-	python -m pip install -r requirements.txt
-	```
+| Piece | Path | Purpose |
+|--------|------|---------|
+| Product UI | `web/` | Landing, login, Create studio, projects, billing, team |
+| SaaS API | `api/` | Auth (JWT), credits, projects, jobs, Stripe, orgs |
+| Engine | `movie_pipeline/` | Multi-agent movie planning + image/video generation |
+| Ops | `streamlit_app.py` | Simple monitor against the API |
+| Own model lab | `video_lab/` + `gradio_video_lab.py` | Train/test local Causal VAE + Spatiotemporal DiT |
+| Docs | `docs/` | Lab guide + manual feature checklist |
+| Data (lab) | `data/video_lab/` | Raw clips, smoke clips, `manifest.jsonl` |
+| Outputs (lab) | `outputs/video_lab/` | VAE/DiT checkpoints + sample MP4s |
+| Storage (product) | `storage/` | Local DB / assets for Movie Flow |
 
-   Optional local diffusion/image training dependencies:
+---
 
-	```powershell
-	python -m pip install -r requirements-model.txt
-	```
+## Prerequisites
 
-4. Set the required environment variables in PowerShell:
+- Python 3.10+
+- Node.js 18+ (for the web app)
+- Optional: NVIDIA GPU + CUDA PyTorch (much faster for the video lab)
 
-	```powershell
-	$env:HF_TOKEN = "your-hugging-face-token"
-	$env:HF_TEXT_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
-	```
+---
 
-Make sure `HF_TOKEN` is set in the same shell session that launches the app. If you open a new terminal, export it again before running Streamlit or the CLI.
+## Setup (once)
 
-`HF_TEXT_MODEL` is optional. If you do not set it, the code defaults to `meta-llama/Meta-Llama-3-8B-Instruct`.
+```powershell
+cd C:\hackathon\Gemini_CLI\movie-AI
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+copy .env.example .env
+```
 
-Optional video settings:
+Edit `.env` as needed. **`HF_TOKEN` is optional** for Movie Flow remote LLM/video; without it, the pipeline uses local planning + cinematic fallbacks.
 
-	```powershell
-	$env:HF_VIDEO_PROVIDER = "fal-ai"
-	$env:HF_VIDEO_MODEL = "Wan-AI/Wan2.2-T2V-A14B"
-	```
+For the video lab also install:
 
-Optional image/keyframe settings:
+```powershell
+python -m pip install -r requirements-video-lab.txt
+```
 
-	```powershell
-	$env:GENERATE_KEYFRAMES = "true"
-	$env:IMAGE_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
-	$env:IMAGE_VAE_ID = "madebyollin/sdxl-vae-fp16-fix"
-	$env:IMAGE_STEPS = "30"
-	$env:IMAGE_GUIDANCE = "6.5"
-	```
+GPU (recommended for training/generate):
 
-When `GENERATE_KEYFRAMES` is enabled, each `ScenePacket` gets an `image_prompt` and a generated
-`image_path` before video rendering. Video generation still uses the Hugging Face routed model first
-and falls back to a local MP4 renderer if remote generation is unavailable.
+```powershell
+python -m pip uninstall -y torch torchvision
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+```
 
-If Hugging Face provider credits are unavailable or the routed model cannot return a video, the app automatically writes a local cinematic MP4 fallback so the Streamlit UI still shows playable video.
-That fallback now streams frames through the bundled FFmpeg binary from `imageio-ffmpeg`, so no separate system FFmpeg install is required.
+---
 
-## Run
+## 1) Movie Flow — product studio
 
-1. Start the CLI pipeline from the repository root:
+### Start API
 
-	```powershell
-	python movie_pipeline/main.py
-	```
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-2. Start the Streamlit dashboard from the repository root:
+### Start web
 
-	```powershell
-	python -m streamlit run streamlit_app.py
-	```
+```powershell
+cd web
+copy .env.local.example .env.local
+npm install
+npm run dev
+```
 
-If the shell is using the wrong interpreter, run the dashboard through the repository environment directly:
+Open **http://localhost:3000** → register → use **Create** for Image / Video / Movie.
 
-	```powershell
-	.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py
-	```
+### Modes
 
-The dashboard shows scene cards, the organizer manifest, a live Agent Processing panel, raw packet JSON, and inline MP4 previews when video files are available.
+- **Image** — still generation (credits)
+- **Video** — short clip generation
+- **Movie** — multi-agent pipeline (script → shots → clips → assemble)
 
-Generated scene packets and video stubs are written to `movie_pipeline/output`.
+### Ops monitor (optional)
 
-## Generative Model Layer
+```powershell
+$env:MOVIE_FLOW_API_URL = "http://127.0.0.1:8000"
+python -m streamlit run streamlit_app.py
+```
 
-The repo now separates the model architecture choices from the agent pipeline:
+### Offline CLI pipeline
 
-- `movie_pipeline/models/generative_config.py` defines image, video, and LoRA fine-tuning configs.
-- `movie_pipeline/models/prompt_conditioning.py` converts Director/Cinematographer/Editor outputs into image and video conditioning prompts.
-- `movie_pipeline/models/image_client.py` runs SDXL through Hugging Face Diffusers when optional model dependencies are installed.
-- `configs/generative_model.example.json` documents the intended text encoder, VAE, denoising backbone, scheduler, and temporal-video strategy.
+```powershell
+python movie_pipeline/main.py
+```
 
-For fine-tuning, start with LoRA rather than base-model training:
+### Product features (summary)
 
-	```powershell
-	python scripts/print_lora_command.py --dataset-dir data/images --steps 1200 --rank 16
-	```
+- Auth + **credits** (signup grant; image / video / movie costs differ)
+- Projects, assets, ZIP export
+- Billing (Stripe when keys set; demo upgrade otherwise)
+- Teams / orgs / invites
+- Pricing: Starter / Pro / Enterprise
 
-Use the printed command with the official Diffusers SDXL LoRA training script. For video, the practical path is to
-freeze the image backbone and fine-tune temporal adapters or LoRA layers on top of AnimateDiff, CogVideoX, Wan, or
-your Motif-Video target.
+---
+
+## 2) Own Video Model Lab — research
+
+This is where you build **our** model (not Veo, not CogVideoX in the UI).
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python gradio_video_lab.py
+```
+
+Open **http://127.0.0.1:7860**
+
+### Tabs (workflow)
+
+| Tab | What you do |
+|-----|-------------|
+| **Checklist** | Live ✅/⬜ — YOU vs LAB (Phase A data + Phase B architecture) |
+| **Data** | Smoke / curate with **optical-flow** gates → **Recaption** for `dense_caption` |
+| **Labels** | Edit caption / camera / lighting / motion / aesthetic / tags |
+| **Train** | Curriculum Stage 1/2/3 + aspect bucket → Train VAE → Train DiT |
+| **Generate** | Prompt → MP4 from local checkpoints |
+
+### Manual data you should add
+
+1. Put real MP4/WebM into `data/video_lab/raw/` **or** download from [Pexels](https://www.pexels.com) (Videos provided by Pexels):
+   - Add `PEXELS_API_KEY=` to `.env` ([free key](https://www.pexels.com/api/))
+   - `python scripts/download_pexels.py --query "ocean waves" --count 200`
+   - Or Gradio **Data → Download from Pexels**
+2. **Data → Curate raw → manifest**
+3. **Labels** / **Recaption**, then Train
+
+Example row:
+
+```json
+{
+  "path": "C:/hackathon/Gemini_CLI/movie-AI/data/video_lab/raw/my_clip.mp4",
+  "caption": "neon city street at night, wet asphalt, slow dolly forward",
+  "camera": "dolly forward",
+  "lighting": "neon night",
+  "motion": "camera push-in, light rain",
+  "aesthetic": 8,
+  "tags": ["city", "rain", "cinematic"],
+  "negative": "watermark, shaky blur, logos",
+  "fps": 24,
+  "frames": 48
+}
+```
+
+Full checklist: [docs/OWN_MODEL_CHECKLIST.md](docs/OWN_MODEL_CHECKLIST.md)  
+Lab details: [docs/VIDEO_MODEL_LAB.md](docs/VIDEO_MODEL_LAB.md)  
+Niche 256–512p / 24GB: [docs/NICHE_TRAINING.md](docs/NICHE_TRAINING.md) (`scripts/train_niche.py`)
+
+### Honest expectations
+
+- Smoke/toy training → abstract color motion (not photoreal Veo quality)
+- Competing with commercial models needs **lots of real clips + longer GPU training + larger nets**
+- RTX 3050-class GPUs are fine for research; not for Veo-scale training
+
+---
+
+## Repo map (quick)
+
+```text
+movie-AI/
+├── api/                 # FastAPI SaaS
+├── web/                 # Next.js product UI
+├── movie_pipeline/      # Agents + Motif/image clients
+├── video_lab/           # Own VAE/DiT models, train, infer, Gradio app
+├── data/video_lab/      # Lab datasets + manifest.jsonl
+├── outputs/video_lab/   # Checkpoints + samples
+├── docs/                # OWN_MODEL_CHECKLIST, VIDEO_MODEL_LAB
+├── storage/             # Product DB / files
+├── gradio_video_lab.py  # Launch lab UI
+├── streamlit_app.py     # Ops monitor
+├── requirements.txt
+├── requirements-video-lab.txt
+└── .env.example
+```
+
+---
+
+## Environment variables
+
+See [`.env.example`](.env.example).
+
+| Area | Vars |
+|------|------|
+| Optional remote models | `HF_TOKEN`, `HF_TEXT_MODEL`, `HF_VIDEO_*` |
+| API | `JWT_SECRET`, `DATABASE_URL`, `STORAGE_ROOT`, `CORS_ORIGINS` |
+| Billing | `STRIPE_*` |
+| Web | `web/.env.local` → API base URL |
+
+---
+
+## Optional: SDXL keyframes (movie pipeline)
+
+```powershell
+python -m pip install -r requirements-model.txt
+$env:GENERATE_KEYFRAMES = "true"
+```
+
+Uses SDXL for keyframes when GPU/deps allow; otherwise local stills.
+
+---
+
+## Typical day
+
+**Use the product**
+
+1. Start API (`:8000`) + web (`:3000`)
+2. Register → Create Image/Video/Movie
+
+**Improve our video model**
+
+1. Start Gradio (`:7860`)
+2. Checklist → add clips → Labels → Train VAE → Train DiT → Generate
+3. Restart Gradio after code changes
+
+---
+
+## License
+
+See [LICENSE](LICENSE).

@@ -4,3 +4,16 @@ imageio-ffmpeg
 numpy
 Pillow
 streamlit
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic[email]
+pydantic-settings
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt<4.1
+stripe
+python-multipart
+httpx
+email-validator
+python-dotenv

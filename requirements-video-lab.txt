@@ -1,0 +1,8 @@
+gradio>=4.44.0
+einops
+omegaconf
+opencv-python-headless
+scenedetect[opencv]
+av
+tqdm
+-r requirements-model.txt

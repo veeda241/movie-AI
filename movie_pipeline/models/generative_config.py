@@ -33,7 +33,8 @@ class ImageGenerationConfig:
     )
 
     @classmethod
-    def from_env(cls) -> "ImageGenerationConfig":
+    def from_env(cls, output_dir: Path | None = None) -> "ImageGenerationConfig":
+        default_out = Path(__file__).resolve().parents[1] / "output" / "images"
         return cls(
             family=ModelFamily(os.environ.get("IMAGE_MODEL_FAMILY", cls.family.value)),
             model_id=os.environ.get("IMAGE_MODEL_ID", cls.model_id),
@@ -45,6 +46,7 @@ class ImageGenerationConfig:
             num_inference_steps=int(os.environ.get("IMAGE_STEPS", str(cls.num_inference_steps))),
             guidance_scale=float(os.environ.get("IMAGE_GUIDANCE", str(cls.guidance_scale))),
             negative_prompt=os.environ.get("IMAGE_NEGATIVE_PROMPT", cls.negative_prompt),
+            output_dir=Path(output_dir) if output_dir is not None else Path(os.environ.get("IMAGE_OUTPUT_DIR", str(default_out))),
         )
 
 

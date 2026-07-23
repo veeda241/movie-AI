@@ -3,6 +3,9 @@ accelerate
 diffusers
 peft
 safetensors
+# Install CUDA PyTorch separately on NVIDIA machines, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# CPU-only fallback if no GPU:
 torch
 torchvision
 transformers

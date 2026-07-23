@@ -5,8 +5,10 @@ from typing import Any
 
 try:
     from movie_pipeline.agents.base import call_hf_json
-except ImportError:  # pragma: no cover - direct execution fallback
+    from movie_pipeline.agents.local_plan import has_hf_token, local_organizer_manifest
+except ImportError:  # pragma: no cover
     from agents.base import call_hf_json
+    from agents.local_plan import has_hf_token, local_organizer_manifest
 
 
 class VideoOrganizerAgent:
@@ -15,6 +17,10 @@ class VideoOrganizerAgent:
             all_outputs = {}
         if not isinstance(all_outputs, dict):
             raise TypeError("VideoOrganizerAgent expected a dictionary of pipeline outputs.")
+
+        if not has_hf_token():
+            print("[VideoOrganizerAgent] HF_TOKEN missing — using local sequence manifest.", flush=True)
+            return local_organizer_manifest(all_outputs)
 
         prompt = (
             "You are a video production organizer. Given all pipeline outputs: "

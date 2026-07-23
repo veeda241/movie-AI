@@ -4,8 +4,10 @@ from typing import Any
 
 try:
     from movie_pipeline.agents.base import call_hf_json
-except ImportError:  # pragma: no cover - direct execution fallback
+    from movie_pipeline.agents.local_plan import has_hf_token, local_director_scenes
+except ImportError:  # pragma: no cover
     from agents.base import call_hf_json
+    from agents.local_plan import has_hf_token, local_director_scenes
 
 
 class DirectorAgent:
@@ -14,6 +16,10 @@ class DirectorAgent:
             movie_idea = str(movie_idea.get("movie_idea", "")).strip()
         elif not isinstance(movie_idea, str):
             movie_idea = str(movie_idea)
+
+        if not has_hf_token():
+            print("[DirectorAgent] HF_TOKEN missing — using local scene outline.", flush=True)
+            return local_director_scenes(movie_idea)
 
         prompt = (
             f"You are a film director. Given this movie idea: '{movie_idea}', produce a JSON array of scenes. "

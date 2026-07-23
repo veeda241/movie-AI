@@ -19,9 +19,9 @@ from movie_pipeline.video.motif_client import MotifClient
 
 
 class Orchestrator:
-    def __init__(self) -> None:
+    def __init__(self, output_dir: Path | str | None = None) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
-        self.output_dir = self.project_root / "output"
+        self.output_dir = Path(output_dir) if output_dir is not None else self.project_root / "output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.director = DirectorAgent()
@@ -29,8 +29,8 @@ class Orchestrator:
         self.cinematographer = CinematographerAgent()
         self.editor = EditorAgent()
         self.video_organizer = VideoOrganizerAgent()
-        self.video_client = MotifClient()
-        self.image_client = ImageGenerationClient()
+        self.video_client = MotifClient(output_dir=self.output_dir)
+        self.image_client = ImageGenerationClient(output_dir=self.output_dir / "images")
         self.last_organizer_output: dict[str, Any] = {}
 
     def run(
@@ -201,10 +201,12 @@ class Orchestrator:
 
         self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: generating keyframe")
         try:
+            image_out = self.output_dir / "images" / f"scene_{packet.scene_number}_keyframe.png"
             packet.image_path = self.image_client.generate(
                 packet.image_prompt,
                 packet.scene_number,
                 seed=seed_from_prompt(packet.image_prompt, packet.scene_number),
+                output_path=image_out,
             )
             self._write_scene_packet(packet)
             self._emit_progress(progress_callback, f"[Image] Scene {packet.scene_number}: saved {packet.image_path}")
@@ -217,7 +219,12 @@ class Orchestrator:
         progress_callback: Callable[[str], None] | None = None,
     ) -> None:
         self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: generating video")
-        packet.video_path = self.video_client.generate(packet.video_prompt, packet.scene_number)
+        video_out = self.output_dir / f"scene_{packet.scene_number}_video.mp4"
+        packet.video_path = self.video_client.generate(
+            packet.video_prompt,
+            packet.scene_number,
+            output_path=video_out,
+        )
         self._write_scene_packet(packet)
         if packet.video_path:
             self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: saved {packet.video_path}")

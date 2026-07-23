@@ -5,8 +5,10 @@ from typing import Any
 
 try:
     from movie_pipeline.agents.base import call_hf_json
-except ImportError:  # pragma: no cover - direct execution fallback
+    from movie_pipeline.agents.local_plan import has_hf_token, local_screenwriter_blocks
+except ImportError:  # pragma: no cover
     from agents.base import call_hf_json
+    from agents.local_plan import has_hf_token, local_screenwriter_blocks
 
 
 class ScreenwriterAgent:
@@ -15,6 +17,10 @@ class ScreenwriterAgent:
             director_output = director_output.get("director_output", [])
         if not isinstance(director_output, list):
             raise TypeError("ScreenwriterAgent expected a list of director scenes.")
+
+        if not has_hf_token():
+            print("[ScreenwriterAgent] HF_TOKEN missing — using local script blocks.", flush=True)
+            return local_screenwriter_blocks(director_output)
 
         prompt = (
             "You are a screenwriter. Given these scenes: "
@@ -25,6 +31,8 @@ class ScreenwriterAgent:
         script_blocks = call_hf_json(prompt)
 
         if not isinstance(script_blocks, list):
-            raise ValueError("ScreenwriterAgent expected the Hugging Face model to return a JSON array of script blocks.")
+            raise ValueError(
+                "ScreenwriterAgent expected the Hugging Face model to return a JSON array of script blocks."
+            )
 
         return script_blocks

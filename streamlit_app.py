@@ -1,105 +1,48 @@
 from __future__ import annotations
 
 import os
-import json
-from pathlib import Path
+import time
 from typing import Any
 
+import httpx
 import streamlit as st
 
-from movie_pipeline.pipeline.orchestrator import Orchestrator
-from movie_pipeline.pipeline.scene_packet import ScenePacket
+APP_TITLE = "Movie Flow Ops"
+APP_SUBTITLE = "Agent monitor wired to the Movie Flow API (jobs, events, assets)."
 
-APP_TITLE = "Movie AI Studio"
-APP_SUBTITLE = "Plan scenes with Hugging Face agents and render video stubs with Motif-Video-2B."
+API_URL = os.environ.get("MOVIE_FLOW_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
 def _ensure_state() -> None:
-    if "scene_packets" not in st.session_state:
-        st.session_state.scene_packets = []
-    if "organizer_output" not in st.session_state:
-        st.session_state.organizer_output = {}
-    if "processing_log" not in st.session_state:
-        st.session_state.processing_log = []
-    if "movie_idea" not in st.session_state:
-        st.session_state.movie_idea = ""
-    if "last_error" not in st.session_state:
-        st.session_state.last_error = ""
+    defaults = {
+        "token": os.environ.get("MOVIE_FLOW_API_TOKEN", ""),
+        "email": "",
+        "password": "",
+        "project_id": "",
+        "job": None,
+        "events": [],
+        "last_error": "",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
-def _missing_env_vars() -> list[str]:
-    required_vars = ["HF_TOKEN"]
-    return [name for name in required_vars if not os.environ.get(name)]
+def _headers() -> dict[str, str]:
+    token = st.session_state.token
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
 
 
-def _scene_packets_to_dicts(scene_packets: list[ScenePacket]) -> list[dict[str, Any]]:
-    return [packet.to_dict() for packet in scene_packets]
-
-
-def _read_json_file(file_path: str) -> Any:
-    path = Path(file_path)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        st.warning(f"Failed to parse JSON from packet file '{file_path}': {exc}")
-        return None
-
-
-def _render_summary(scene_packets: list[ScenePacket], organizer_output: dict[str, Any]) -> None:
-    runtime = organizer_output.get("final_runtime_sec")
-    style_notes = organizer_output.get("style_notes", "")
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Scenes", len(scene_packets))
-    col2.metric("Runtime", f"{runtime}s" if runtime is not None else "Unknown")
-    col3.metric("Videos", sum(1 for packet in scene_packets if packet.video_path))
-
-    if style_notes:
-        st.info(style_notes)
-
-
-def _render_scene_packet(packet: ScenePacket) -> None:
-    packet_dict = packet.to_dict()
-    with st.expander(f"Scene {packet.scene_number}: {packet.title}", expanded=True):
-        left, right = st.columns([1.2, 1])
-
-        with left:
-            st.subheader("Scene Details")
-            st.write(f"Mood: {packet.mood}")
-            st.write(f"Setting: {packet.setting}")
-            if packet.image_prompt:
-                st.write(f"Image prompt: {packet.image_prompt}")
-            st.write(f"Video prompt: {packet.video_prompt}")
-
-            if packet.script:
-                st.markdown("**Script**")
-                st.json(packet.script)
-            if packet.shots:
-                st.markdown("**Shots**")
-                st.json(packet.shots)
-            if packet.edit_plan:
-                st.markdown("**Edit plan**")
-                st.json(packet.edit_plan)
-
-        with right:
-            st.subheader("Media")
-            if packet.image_path and Path(packet.image_path).exists():
-                st.image(packet.image_path, caption=packet.image_path, use_container_width=True)
-            elif packet.image_path:
-                st.warning(f"Image path reported, but file was not found: {packet.image_path}")
-
-            if packet.video_path and Path(packet.video_path).exists():
-                st.video(packet.video_path)
-                st.caption(packet.video_path)
-            elif packet.video_path:
-                st.warning(f"Video path reported, but file was not found: {packet.video_path}")
-            else:
-                st.info("No video generated for this scene yet.")
-
-            st.markdown("**Raw packet**")
-            st.json(packet_dict)
+def api_request(method: str, path: str, **kwargs: Any) -> Any:
+    with httpx.Client(timeout=120.0) as client:
+        response = client.request(method, f"{API_URL}{path}", headers=_headers(), **kwargs)
+        if response.status_code >= 400:
+            raise RuntimeError(f"{response.status_code}: {response.text}")
+        if response.status_code == 204 or not response.content:
+            return None
+        return response.json()
 
 
 def main() -> None:
@@ -108,103 +51,116 @@ def main() -> None:
 
     st.title(APP_TITLE)
     st.write(APP_SUBTITLE)
+    st.caption(f"API: {API_URL}")
 
     with st.sidebar:
-        st.header("Pipeline")
-        st.write("Enter a movie idea, run the Hugging Face agent chain, and inspect each generated scene packet.")
-        st.write("Environment variables required:")
-        st.code("HF_TOKEN")
-        missing_env_vars = _missing_env_vars()
-        if missing_env_vars:
-            st.warning(f"Missing environment variables: {', '.join(missing_env_vars)}")
-        if st.button("Clear results", use_container_width=True):
-            st.session_state.scene_packets = []
-            st.session_state.organizer_output = {}
-            st.session_state.processing_log = []
+        st.header("Auth")
+        st.session_state.email = st.text_input("Email", value=st.session_state.email)
+        st.session_state.password = st.text_input("Password", type="password", value=st.session_state.password)
+        if st.button("Login", use_container_width=True):
+            try:
+                data = api_request(
+                    "POST",
+                    "/auth/login",
+                    json={"email": st.session_state.email, "password": st.session_state.password},
+                )
+                st.session_state.token = data["access_token"]
+                st.success("Authenticated")
+            except Exception as exc:
+                st.session_state.last_error = str(exc)
+
+        st.session_state.token = st.text_input("API token", value=st.session_state.token)
+        if st.button("Clear job", use_container_width=True):
+            st.session_state.job = None
+            st.session_state.events = []
             st.session_state.last_error = ""
-            st.session_state.movie_idea = ""
-            st.rerun()
-
-    st.session_state.movie_idea = st.text_area(
-        "Movie idea",
-        value=st.session_state.movie_idea,
-        height=140,
-        placeholder="A disgraced astronaut returns to Earth to uncover why the moon is broadcasting her childhood memories.",
-    )
-
-    run_clicked = st.button("Generate movie", type="primary", use_container_width=True)
-
-    processing_panel = st.container()
-    with processing_panel:
-        st.subheader("Agent Processing")
-        status_placeholder = st.empty()
-        log_placeholder = st.empty()
-        if st.session_state.processing_log:
-            status_placeholder.info(st.session_state.processing_log[-1])
-            log_placeholder.code("\n".join(st.session_state.processing_log), language="text")
-        else:
-            status_placeholder.caption("The pipeline status will appear here while the agents run.")
-
-    if run_clicked:
-        idea = st.session_state.movie_idea.strip()
-        if not idea:
-            st.session_state.last_error = "Enter a movie idea before running the pipeline."
-        else:
-            st.session_state.last_error = ""
-            st.session_state.processing_log = []
-            progress_log = st.session_state.processing_log
-
-            def update_progress(message: str) -> None:
-                progress_log.append(message)
-                status_placeholder.info(message)
-                log_placeholder.code("\n".join(progress_log), language="text")
-
-            update_progress("Starting pipeline...")
-            with st.spinner("Running agents and generating videos..."):
-                try:
-                    orchestrator = Orchestrator()
-                    scene_packets = orchestrator.run(idea, progress_callback=update_progress)
-                    st.session_state.scene_packets = scene_packets
-                    st.session_state.organizer_output = orchestrator.last_organizer_output
-                    update_progress("Pipeline finished successfully.")
-                except Exception as exc:
-                    st.session_state.scene_packets = []
-                    st.session_state.organizer_output = {}
-                    st.session_state.last_error = str(exc)
-                    update_progress(f"Pipeline failed: {exc}")
 
     if st.session_state.last_error:
         st.error(st.session_state.last_error)
 
-    scene_packets = st.session_state.scene_packets
-    organizer_output = st.session_state.organizer_output
+    if not st.session_state.token:
+        st.info("Log in or paste a JWT from Movie Flow to monitor jobs.")
+        return
 
-    if scene_packets:
-        _render_summary(scene_packets, organizer_output)
+    try:
+        me = api_request("GET", "/auth/me")
+        projects = api_request("GET", "/projects")
+    except Exception as exc:
+        st.error(str(exc))
+        return
 
-        top_left, top_right = st.columns([1, 1])
-        with top_left:
-            st.subheader("Sequence manifest")
-            st.json(organizer_output or {"message": "No organizer output available yet."})
-        with top_right:
-            st.subheader("Scene packet index")
-            st.write([packet.scene_number for packet in scene_packets])
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Credits", me.get("credit_balance", 0))
+    col2.metric("Plan", me.get("plan", "—"))
+    col3.metric("Projects", len(projects or []))
 
-        for packet in scene_packets:
-            _render_scene_packet(packet)
+    project_options = {p["name"]: p["id"] for p in projects or []}
+    if not project_options:
+        if st.button("Create default project"):
+            created = api_request("POST", "/projects", json={"name": "Ops Project"})
+            st.session_state.project_id = created["id"]
+            st.rerun()
+        return
 
-        with st.expander("All scene packets as JSON", expanded=False):
-            st.json(_scene_packets_to_dicts(scene_packets))
+    selected_name = st.selectbox("Project", list(project_options.keys()))
+    st.session_state.project_id = project_options[selected_name]
 
-        with st.expander("Loaded packet files from output", expanded=False):
-            for packet in scene_packets:
-                file_path = Path("movie_pipeline") / "output" / f"scene_{packet.scene_number}_packet.json"
-                loaded_packet = _read_json_file(str(file_path))
-                if loaded_packet is not None:
-                    st.markdown(f"**{file_path.as_posix()}**")
-                    st.json(loaded_packet)
-    else:
-        st.info("Run the pipeline to generate a scene breakdown and video previews.")
+    idea = st.text_area(
+        "Movie idea",
+        height=120,
+        placeholder="A courier delivers memories in bottles across a flooded city at dusk.",
+    )
+
+    if st.button("Run multi-agent movie", type="primary", use_container_width=True):
+        try:
+            job = api_request(
+                "POST",
+                "/generate/movie",
+                json={
+                    "project_id": st.session_state.project_id,
+                    "prompt": idea.strip(),
+                    "model": "multi-agent",
+                },
+            )
+            st.session_state.job = job
+            st.session_state.events = job.get("events", [])
+            st.session_state.last_error = ""
+        except Exception as exc:
+            st.session_state.last_error = str(exc)
+
+    job = st.session_state.job
+    if job:
+        st.subheader("Job")
+        status_box = st.empty()
+        log_box = st.empty()
+        status_box.info(f"{job['id']} · {job['status']}")
+        log_box.code("\n".join(st.session_state.events), language="text")
+
+        while job["status"] in {"queued", "running"}:
+            time.sleep(1.0)
+            try:
+                job = api_request("GET", f"/jobs/{job['id']}")
+                st.session_state.job = job
+                st.session_state.events = job.get("events", [])
+                status_box.info(f"{job['id']} · {job['status']}")
+                log_box.code("\n".join(st.session_state.events), language="text")
+            except Exception as exc:
+                st.session_state.last_error = str(exc)
+                break
+
+        if job["status"] == "succeeded":
+            st.success("Movie job completed")
+            assets = api_request("GET", f"/assets?project_id={st.session_state.project_id}")
+            for asset in assets or []:
+                if asset["kind"] == "video":
+                    st.write(asset["prompt"][:120])
+                    file_url = f"{API_URL}{asset['file_url']}?token={st.session_state.token}"
+                    st.video(file_url)
+                elif asset["kind"] == "image":
+                    file_url = f"{API_URL}{asset['file_url']}?token={st.session_state.token}"
+                    st.image(file_url)
+        elif job["status"] == "failed":
+            st.error(job.get("error") or "Job failed")
 
 
 if __name__ == "__main__":
