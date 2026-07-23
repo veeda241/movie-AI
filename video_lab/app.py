@@ -8,7 +8,7 @@ import gradio as gr
 from video_lab import MANIFEST_PATH, RAW_DIR, ensure_dirs
 from video_lab.data.buckets import list_bucket_labels, parse_bucket_choice
 from video_lab.data.curate import build_manifest_from_raw, ingest_folder
-from video_lab.data.hf_wan_datasets import build_hf_wan_manifest
+from video_lab.data.hf_wan_datasets import build_hf_wan_manifest, download_all_wan_action_datasets
 from video_lab.data.manifest_edit import (
     CAMERA_CHOICES,
     LIGHTING_CHOICES,
@@ -26,7 +26,6 @@ from video_lab.infer.research_generate import generate_research_video
 from video_lab.roadmap import checklist_markdown, scan_checklist, write_manifest_template
 from video_lab.train.curriculum import apply_stage_to_train_kwargs, list_stage_labels, resolve_stage
 from video_lab.train.train_dit import train_dit
-from video_lab.train.train_lora_t2v import train_lora_t2v
 from video_lab.train.train_vae import train_vae
 from video_lab.utils.device import get_device
 
@@ -123,6 +122,33 @@ def ui_pexels_download(query: str, count: float, min_dur: float, max_dur: float,
             log,
             f"Pexels done: {summary.get('downloaded')} new clips. "
             f"[Videos provided by Pexels](https://www.pexels.com)",
+        )
+    except Exception:
+        for line in lines:
+            log = _append(log, line)
+        return _append(log, traceback.format_exc())
+
+
+def ui_hf_wan_download(log: str):
+    lines: list[str] = []
+
+    def log_fn(msg: str):
+        lines.append(msg)
+
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+    except Exception:
+        pass
+    try:
+        summary = download_all_wan_action_datasets(log_fn=log_fn)
+        for line in lines:
+            log = _append(log, line)
+        return _append(
+            log,
+            f"HF Wan actions done: downloaded={summary.get('downloaded')} "
+            f"skipped={summary.get('skipped')} failed={summary.get('failed')}",
         )
     except Exception:
         for line in lines:
@@ -391,6 +417,12 @@ Device: `{device}`
                     "[Pexels](https://www.pexels.com) (Videos provided by Pexels). "
                     "Optical-flow drops slideshows / chaotic shake. Then **Recaption**."
                 )
+                with gr.Accordion("Download HF Wan action packs", open=False):
+                    gr.Markdown(
+                        "Downloads `linoyts/wan_*` action clips into raw/. "
+                        "Optional `HF_TOKEN` in `.env` helps rate limits."
+                    )
+                    hf_wan_btn = gr.Button("Download all HF Wan action datasets", variant="secondary")
                 with gr.Accordion("Download from Pexels", open=True):
                     gr.Markdown(
                         "Set `PEXELS_API_KEY` in `.env` "
@@ -415,6 +447,7 @@ Device: `{device}`
                     b_curate = gr.Button("Curate raw → manifest", variant="primary")
                     b_recap = gr.Button("Recaption manifest")
                 manifest_out = gr.Textbox(label="Manifest path")
+                hf_wan_btn.click(ui_hf_wan_download, inputs=[data_log], outputs=[data_log])
                 pexels_btn.click(
                     ui_pexels_download,
                     inputs=[pexels_q, pexels_n, pexels_min, pexels_max, data_log],
@@ -572,6 +605,8 @@ Device: `{device}`
                         lines.append(msg)
 
                     try:
+                        from video_lab.train.train_lora_t2v import train_lora_t2v
+
                         lr = float(lr_str)
                         path = manifest_path.strip() or None
                         if path and not Path(path).exists():

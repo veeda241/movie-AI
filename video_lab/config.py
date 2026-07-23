@@ -14,12 +14,12 @@ class LabConfig:
     lora_dir: Path = LORA_CKPT_DIR
     samples_dir: Path = SAMPLES_DIR
 
-    # Default clip length: prefer duration_sec when set in UI (up to 10s)
-    frames: int = 120  # 10s @ 12 fps
+    # Defaults aligned with niche_laptop train (match Generate to Train)
+    frames: int = 8
     fps: int = 12
-    duration_sec: float = 10.0
-    height: int = 128
-    width: int = 128
+    duration_sec: float = 0.7
+    height: int = 256
+    width: int = 256
     vae_latent_channels: int = 4
     dit_hidden: int = 192
     dit_layers: int = 4
@@ -40,7 +40,7 @@ class LabConfig:
     min_flow: float = 0.15
     max_flow: float = 12.0
     max_flow_var: float = 40.0
-    default_bucket: str = "square_128"
+    default_bucket: str = "square_256"
 
     # VAE compression (Phase B): spatial_stride product / temporal
     vae_spatial_compress: int = 8

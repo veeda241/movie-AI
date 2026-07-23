@@ -169,6 +169,7 @@ Curate → train:
 ```powershell
 .\.venv\Scripts\python.exe -c "from video_lab import MANIFEST_PATH, RAW_DIR; from video_lab.data.curate import build_manifest_from_raw; from video_lab.data.recaption import recaption_manifest; build_manifest_from_raw(RAW_DIR, manifest_path=MANIFEST_PATH, run_scene_cut=False, use_optical_flow=True); recaption_manifest(); print(MANIFEST_PATH)"
 
+.\.venv\Scripts\python.exe scripts\check_project.py
 .\.venv\Scripts\python.exe scripts\train_niche.py --profile niche_laptop --vae-steps 3000 --dit-steps 18000
 ```
 
@@ -231,6 +232,7 @@ outputs/video_lab/   Local checkpoints + samples (gitignored)
 | `requirements-video-lab.txt` not found | You are on `main` — checkout `feature/video-lab-own-model` |
 | `.\.venv\Scripts\python.exe` not found | Create venv: `py -3 -m venv .venv` |
 | `Activate.ps1` fails | Skip it; call `.\.venv\Scripts\python.exe` directly |
+| Import / missing files | `.\.venv\Scripts\python.exe scripts\check_project.py` |
 | Flat / meaningless generate | Train on real clips; use niche prompts; match 256 / ~8 frames |
 | No GPU in lab | Install CUDA torch (see §3) |
 | Movie Flow video looks fake | Set `HF_TOKEN` for remote Wan, or accept local fallback |
