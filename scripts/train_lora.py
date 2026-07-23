@@ -18,10 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Ensure pure-Python _regex shim is in place (bypasses Windows DLL policy).
-from video_lab.utils.regex_shim import ensure_regex_shim
+try:
+    from video_lab.utils.regex_shim import ensure_regex_shim
 
-ensure_regex_shim()
+    ensure_regex_shim()
+except Exception:
+    pass
 
 from video_lab import RAW_DIR, DATA_ROOT
 from video_lab.data.hf_wan_datasets import build_hf_wan_manifest
