@@ -53,8 +53,8 @@ class LabConfig:
     dit_patch_w: int = 2
     train_stage: str = "stage2"  # stage1 | stage2 | stage3
 
-    # HF / CogVideoX paths kept for optional scripts only — Gradio UI does not expose them
-    base_t2v_model: str = ""
+    # CogVideoX + LoRA (pre-trained model fine-tune)
+    base_t2v_model: str = "THUDM/CogVideoX-5b"
     lora_rank: int = 16
     lora_steps: int = 100
 

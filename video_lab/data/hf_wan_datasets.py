@@ -15,6 +15,9 @@ import shutil
 from pathlib import Path
 
 from video_lab import DATA_ROOT, RAW_DIR, ensure_dirs
+from video_lab.data.buckets import choose_bucket_for_size
+from video_lab.data.dataset import write_manifest
+from video_lab.data.recaption import densify_row
 
 HF_WAN_INDEX_PATH = DATA_ROOT / "hf_wan_index.jsonl"
 
@@ -249,3 +252,89 @@ def download_all_wan_action_datasets(
         f"index={HF_WAN_INDEX_PATH}"
     )
     return totals
+
+
+def build_hf_wan_manifest(
+    *,
+    manifest_path: Path | None = None,
+    raw_dir: Path | None = None,
+    index_path: Path | None = None,
+) -> Path:
+    """Build a LoRA-ready manifest from downloaded HF Wan action clips.
+
+    Reads the hf_wan_index.jsonl and writes every existing clip into
+    a manifest.jsonl with rich captions, tags, and per-clip metadata.
+    """
+    index = load_hf_wan_index(index_path)
+    raw_dir = Path(raw_dir or RAW_DIR)
+    manifest_path = manifest_path or (raw_dir.parent / "manifest_hf_wan.jsonl")
+
+    if not index:
+        print(f"WARNING: HF Wan index is empty at {index_path or HF_WAN_INDEX_PATH}")
+        return manifest_path
+
+    rows: list[dict] = []
+    for filename, meta in index.items():
+        clip_path = raw_dir / filename
+        if not clip_path.exists() or clip_path.stat().st_size < 100:
+            continue
+
+        # Probe for dimensions (cv2 optional — fallback to av)
+        fps, n_frames, w, h = 8.0, 0, 0, 0
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(clip_path))
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 8)
+            n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            cap.release()
+        except Exception:
+            # cv2 unavailable — try av as fallback
+            try:
+                import av
+                container = av.open(str(clip_path))
+                stream = container.streams.video[0]
+                fps = float(stream.average_rate or 8)
+                n_frames = int(stream.frames or 0)
+                w = int(stream.width or 0)
+                h = int(stream.height or 0)
+                container.close()
+            except Exception:
+                pass
+
+        caption = str(meta.get("caption", "")).strip()
+        if not caption:
+            action = str(meta.get("action", "")).replace("_", " ")
+            caption = f"{action}, realistic video"
+
+        bucket = choose_bucket_for_size(max(w, 64), max(h, 64))
+        row = {
+            "path": str(clip_path.resolve()),
+            "caption": caption,
+            "dense_caption": str(meta.get("dense_caption", caption)),
+            "camera": "",
+            "lighting": "",
+            "motion": "",
+            "aesthetic": 6,
+            "tags": meta.get("tags", ["wan_action"]),
+            "negative": "",
+            "fps": max(fps, 1),
+            "frames": max(n_frames, 8),
+            "width": max(w, 64),
+            "height": max(h, 64),
+            "bucket": bucket.name,
+            "bucket_w": bucket.width,
+            "bucket_h": bucket.height,
+            "source": "hf_wan",
+            "action": str(meta.get("action", "")),
+        }
+        row = densify_row(row, fill_empty_labels=True)
+        rows.append(row)
+
+    if not rows:
+        print(f"WARNING: No existing HF Wan clips found in {raw_dir}")
+        return manifest_path
+
+    print(f"Building HF Wan manifest: {len(rows)} clips -> {manifest_path}")
+    return write_manifest(rows, manifest_path)

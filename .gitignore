@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 movie_pipeline/output/
+NUL
 storage/
 .env
 .venv/

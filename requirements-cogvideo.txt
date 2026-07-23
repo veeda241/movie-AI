@@ -1,0 +1,46 @@
+# =============================================================================
+#  CogVideoX-5B LoRA Fine-Tuning — Requirements
+# =============================================================================
+# Install with:
+#   pip install -r requirements-cogvideo.txt
+#
+# For CUDA PyTorch (recommended for training), first run:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# Then run the above pip install command.
+#
+# Tested with Python 3.10+ on CUDA 12.x and 24GB+ VRAM.
+# =============================================================================
+
+# ── Core ML ──────────────────────────────────────────────────────────────────
+torch>=2.0.0                          # PyTorch (CUDA version recommended)
+torchvision                           # PyTorch vision utilities
+diffusers>=0.30.0                     # CogVideoX pipeline, VAE, transformer
+peft>=0.12.0                          # LoRA adapter (PEFT)
+accelerate>=0.30.0                    # Device placement, mixed precision, AMP
+transformers>=4.40.0                  # T5 text encoder for CogVideoX-5B
+safetensors                           # Safe weight serialization format
+
+# ── CogVideoX Tokenizer ─────────────────────────────────────────────────────
+tiktoken                              # T5 tokenizer dependency (CogVideoX-5B)
+sentencepiece                         # Also required by T5 tokenizer
+
+# ── Video & Image Processing ─────────────────────────────────────────────────
+opencv-python-headless                # Video reading, dimension probing (cv2)
+av                                    # PyAV — efficient video frame I/O
+imageio-ffmpeg                        # FFmpeg binding for video read/write
+Pillow>=10.0.0                        # Image resizing, PIL utilities
+numpy>=1.24.0                         # Array operations throughout pipeline
+
+# ── Training Helpers ─────────────────────────────────────────────────────────
+einops                                # Tensor reshaping (used by video models)
+tqdm                                  # Progress bars for training loops
+
+# ── Gradio UI ────────────────────────────────────────────────────────────────
+gradio>=4.44.0                        # Video Lab UI (Fine-tune + Generate tabs)
+
+# ── Dataset Curation ─────────────────────────────────────────────────────────
+scenedetect[opencv]                   # Scene detection for video curation
+omegaconf                             # Hierarchical config (scenedetect dep)
+
+# ── Optional / Platform-Specific ─────────────────────────────────────────────
+xformers; platform_system != "Windows" # Memory-efficient attention (Linux/Mac)

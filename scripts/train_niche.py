@@ -16,6 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Ensure pure-Python _regex shim is in place (bypasses Windows DLL policy).
+from video_lab.utils.regex_shim import ensure_regex_shim
+
+ensure_regex_shim()
+
 from video_lab.data.recaption import recaption_manifest
 from video_lab.data.smoke import ensure_smoke_manifest
 from video_lab import MANIFEST_PATH

@@ -8,6 +8,7 @@ import gradio as gr
 from video_lab import MANIFEST_PATH, RAW_DIR, ensure_dirs
 from video_lab.data.buckets import list_bucket_labels, parse_bucket_choice
 from video_lab.data.curate import build_manifest_from_raw, ingest_folder
+from video_lab.data.hf_wan_datasets import build_hf_wan_manifest
 from video_lab.data.manifest_edit import (
     CAMERA_CHOICES,
     LIGHTING_CHOICES,
@@ -20,10 +21,12 @@ from video_lab.data.manifest_edit import (
 )
 from video_lab.data.recaption import recaption_manifest
 from video_lab.data.smoke import ensure_smoke_manifest
+from video_lab.infer.finetune_generate import generate_finetune_video
 from video_lab.infer.research_generate import generate_research_video
 from video_lab.roadmap import checklist_markdown, scan_checklist, write_manifest_template
 from video_lab.train.curriculum import apply_stage_to_train_kwargs, list_stage_labels, resolve_stage
 from video_lab.train.train_dit import train_dit
+from video_lab.train.train_lora_t2v import train_lora_t2v
 from video_lab.train.train_vae import train_vae
 from video_lab.utils.device import get_device
 
@@ -504,6 +507,127 @@ Device: `{device}` · Start on **Checklist**.
                     ui_train_dit,
                     inputs=[steps_dit, stage, bucket, dit_size, min_aes, train_log],
                     outputs=[train_log, ckpt_box],
+                )
+
+            with gr.Tab("Fine-tune"):
+                gr.Markdown(
+                    "# CogVideoX-5B LoRA Fine-tune\n\n"
+                    "Fine-tune the pre-trained CogVideoX-5B model on your HF Wan action clips "
+                    "using LoRA (Low-Rank Adaptation). This is much lighter than full fine-tuning "
+                    "and runs on 16GB VRAM.\n\n"
+                    "**Workflow:**\n"
+                    "1. Build manifest (clips must be in `data/video_lab/raw/`)\n"
+                    "2. Click **Train LoRA** — the model downloads on first run (~10GB)\n"
+                    "3. After training, use **Generate with LoRA** to test\n"
+                )
+
+                with gr.Row():
+                    ft_manifest_btn = gr.Button("Build manifest from HF Wan clips", variant="secondary")
+                ft_manifest_out = gr.Textbox(label="Manifest path", interactive=False)
+                ft_count = gr.Textbox(label="Clip count", interactive=False)
+
+                gr.Markdown("---\n### Training settings")
+                with gr.Row():
+                    ft_steps = gr.Slider(50, 2000, value=200, step=50, label="Steps")
+                    ft_rank = gr.Slider(4, 64, value=16, step=4, label="LoRA rank")
+                    ft_lr = gr.Textbox(value="1e-4", label="Learning rate")
+
+                ft_train_btn = gr.Button("Train LoRA", variant="primary", size="lg")
+                ft_log = gr.Textbox(label="Training log", lines=12)
+                ft_status = gr.Textbox(label="Adapter path", interactive=False)
+
+                gr.Markdown("---\n### Generate with LoRA")
+                ft_prompt = gr.Textbox(
+                    label="Prompt",
+                    lines=3,
+                    value="a person blinking, realistic video",
+                )
+                with gr.Row():
+                    ft_steps_gen = gr.Slider(4, 50, value=20, step=1, label="Diffusion steps")
+                    ft_seed = gr.Number(value=42, label="Seed", precision=0)
+                    ft_duration = gr.Slider(0.5, 10, value=2.0, step=0.1, label="Duration (s)")
+                ft_gen_btn = gr.Button("Generate with LoRA", variant="secondary")
+                ft_video_out = gr.Video(label="Generated video", height=360)
+
+                # Wire up manifest builder
+                def _ui_build_hf_wan_manifest_fn(log: str):
+                    try:
+                        path = build_hf_wan_manifest(raw_dir=RAW_DIR)
+                        count = sum(1 for _ in open(path, encoding="utf-8") if _.strip())
+                        return _append(log, f"Built manifest: {path}"), str(path), f"{count} clips"
+                    except Exception:
+                        return _append(log, traceback.format_exc()), "", ""
+
+                ft_manifest_btn.click(
+                    _ui_build_hf_wan_manifest_fn,
+                    inputs=[ft_log],
+                    outputs=[ft_log, ft_manifest_out, ft_count],
+                )
+
+                # Wire up training
+                def _ui_train_lora_fn(steps, rank, lr_str, manifest_path, log):
+                    lines: list[str] = []
+                    def log_fn(msg: str):
+                        lines.append(msg)
+
+                    try:
+                        lr = float(lr_str)
+                        path = manifest_path.strip() or None
+                        if path and not Path(path).exists():
+                            path = str(build_hf_wan_manifest(raw_dir=RAW_DIR))
+
+                        result = train_lora_t2v(
+                            manifest_path=Path(path) if path else None,
+                            steps=int(steps),
+                            rank=int(rank),
+                            lr=lr,
+                            log_fn=log_fn,
+                        )
+                        for line in lines:
+                            log = _append(log, line)
+                        return log, str(result)
+                    except Exception:
+                        for line in lines:
+                            log = _append(log, line)
+                        return _append(log, traceback.format_exc()), ""
+
+                ft_train_btn.click(
+                    _ui_train_lora_fn,
+                    inputs=[ft_steps, ft_rank, ft_lr, ft_manifest_out, ft_log],
+                    outputs=[ft_log, ft_status],
+                )
+
+                # Wire up generation with LoRA
+                def _ui_generate_lora_fn(prompt, steps, seed, duration, log):
+                    lines: list[str] = []
+                    def log_fn(msg: str):
+                        lines.append(msg)
+
+                    try:
+                        path = generate_finetune_video(
+                            prompt=prompt,
+                            steps=int(steps),
+                            seed=int(seed),
+                            frames=max(8, int(float(duration) * 12)),
+                            fps=12,
+                            height=256,
+                            width=256,
+                            log_fn=log_fn,
+                        )
+                        for line in lines:
+                            log = _append(log, line)
+                        if not Path(path).exists():
+                            return _append(log, "ERROR: video file not generated"), None
+                        return log, path
+                    except Exception:
+                        for line in lines:
+                            log = _append(log, line)
+                        return _append(log, traceback.format_exc()), None
+
+                ft_gen_btn.click(
+                    _ui_generate_lora_fn,
+                    inputs=[ft_prompt, ft_steps_gen, ft_seed, ft_duration, ft_log],
+                    outputs=[ft_log, ft_video_out],
                 )
 
     return demo
