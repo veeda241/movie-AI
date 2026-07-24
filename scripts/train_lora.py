@@ -1,22 +1,28 @@
 #!/usr/bin/env python
-"""CogVideoX-5B LoRA fine-tune on HF Wan action clips.
+"""CogVideoX LoRA fine-tune on HF Wan action clips.
 
-Builds manifest from downloaded clips, then runs LoRA training.
+Examples (PowerShell) — 16GB GPU (recommended):
+  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --base-model THUDM/CogVideoX-2b --steps 1000 --rank 16 --low-vram
 
-Examples (PowerShell):
-  .venv/Scripts/python.exe scripts/train_lora.py --steps 500 --rank 16
-  .venv/Scripts/python.exe scripts/train_lora.py --steps 200 --rank 8 --base-model THUDM/CogVideoX-5b
+  # CogVideoX-5b on 16GB (tight; uses CPU VAE/text offload):
+  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --base-model THUDM/CogVideoX-5b --steps 1000 --rank 8 --height 192 --width 192 --low-vram
+
+  # 24GB+ GPU:
+  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --base-model THUDM/CogVideoX-5b --steps 1000 --rank 16
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 try:
     from video_lab.utils.regex_shim import ensure_regex_shim
@@ -32,23 +38,44 @@ from video_lab.utils.device import get_device
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="CogVideoX-5B LoRA fine-tune on HF Wan actions")
-    parser.add_argument("--steps", type=int, default=200, help="Number of training steps (default: 200)")
+    parser = argparse.ArgumentParser(description="CogVideoX LoRA fine-tune on HF Wan actions")
+    parser.add_argument("--steps", type=int, default=200, help="Training steps (default: 200)")
     parser.add_argument("--rank", type=int, default=16, help="LoRA rank (default: 16)")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
-    parser.add_argument("--base-model", type=str, default="THUDM/CogVideoX-5b", help="Base model ID")
-    parser.add_argument("--manifest-path", type=str, default=None, help="Optional pre-built manifest path")
-    parser.add_argument("--rebuild-manifest", action="store_true", help="Force rebuild manifest from raw clips")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default="THUDM/CogVideoX-2b",
+        help="Base model ID (default: CogVideoX-2b for 16GB GPUs; use 5b on 24GB+)",
+    )
+    parser.add_argument("--manifest-path", type=str, default=None)
+    parser.add_argument("--rebuild-manifest", action="store_true")
+    parser.add_argument("--height", type=int, default=256)
+    parser.add_argument("--width", type=int, default=256)
+    parser.add_argument("--frames", type=int, default=8)
+    parser.add_argument(
+        "--low-vram",
+        action="store_true",
+        default=None,
+        help="Force CPU offload for VAE/text (auto-on if GPU < 20GB)",
+    )
+    parser.add_argument("--no-low-vram", action="store_true", help="Keep VAE/text on GPU")
     args = parser.parse_args()
+
+    low_vram: bool | None
+    if args.no_low_vram:
+        low_vram = False
+    elif args.low_vram:
+        low_vram = True
+    else:
+        low_vram = None  # auto
 
     device = get_device()
     print(f"device={device}")
     print(f"Steps={args.steps} Rank={args.rank} LR={args.lr}")
     print(f"Base model: {args.base_model}")
+    print(f"Size={args.width}x{args.height} frames={args.frames} low_vram={low_vram}")
 
-    # ------------------------------------------------------------------ #
-    # 1. Build manifest from HF Wan clips (if not provided)
-    # ------------------------------------------------------------------ #
     if args.manifest_path:
         manifest_path = Path(args.manifest_path)
         print(f"Using provided manifest: {manifest_path}")
@@ -57,20 +84,16 @@ def main() -> None:
         if not manifest_path.exists() or args.rebuild_manifest:
             print("Building manifest from HF Wan clips...")
             manifest_path = build_hf_wan_manifest(manifest_path=manifest_path, raw_dir=RAW_DIR)
-            if not manifest_path.exists():
+            if not manifest_path.exists() or manifest_path.stat().st_size == 0:
                 print(f"ERROR: No HF Wan clips found in {RAW_DIR}")
-                print("Run scripts/download_hf_wan_actions.py first to download clips.")
+                print("Run scripts/download_hf_wan_actions.py first.")
                 sys.exit(1)
         else:
             print(f"Using existing manifest: {manifest_path}")
 
-    # Count clips
     count = sum(1 for _ in open(manifest_path, encoding="utf-8") if _.strip())
     print(f"Manifest has {count} clips")
 
-    # ------------------------------------------------------------------ #
-    # 2. Run LoRA training
-    # ------------------------------------------------------------------ #
     def log(msg: str) -> None:
         print(msg, flush=True)
 
@@ -81,10 +104,14 @@ def main() -> None:
         steps=args.steps,
         rank=args.rank,
         lr=args.lr,
+        height=args.height,
+        width=args.width,
+        frames=args.frames,
+        low_vram=low_vram,
         log_fn=log,
     )
     print(f"\nLoRA adapter saved to: {result}")
-    print("Done. Launch Gradio and use the Generate tab with Fine-tune model to test.")
+    print("Done. Gradio → Experimental (CogVideo LoRA) → Generate with LoRA.")
 
 
 if __name__ == "__main__":
