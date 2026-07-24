@@ -54,7 +54,7 @@ class LabConfig:
     train_stage: str = "stage2"  # stage1 | stage2 | stage3
 
     # CogVideoX + LoRA (pre-trained model fine-tune)
-    base_t2v_model: str = "THUDM/CogVideoX-5b"
+    base_t2v_model: str = "THUDM/CogVideoX-2b"
     lora_rank: int = 16
     lora_steps: int = 100
 

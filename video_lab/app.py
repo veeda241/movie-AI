@@ -549,10 +549,11 @@ Device: `{device}`
             with gr.Tab("Experimental (CogVideo LoRA)"):
                 gr.Markdown(
                     "### Optional — not the own-model path\n\n"
-                    "This tab fine-tunes **Hugging Face CogVideoX-5B** with LoRA on your clips. "
-                    "It is separate from Train VAE/DiT above. Needs lots of VRAM/disk "
-                    "(`pip install -r requirements-cogvideo.txt`).\n\n"
+                    "This tab fine-tunes **Hugging Face CogVideoX** (2B default / 5B if VRAM allows) "
+                    "with LoRA on your clips. Separate from Train VAE/DiT above. "
+                    "Needs disk + CUDA (`pip install -r requirements-cogvideo.txt`).\n\n"
                     "**Workflow:** Build manifest → Train LoRA → Generate with LoRA.\n"
+                    "Generate uses the base model recorded in `lora_meta.pt` (must match training).\n"
                 )
 
                 with gr.Row():

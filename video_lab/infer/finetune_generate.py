@@ -50,7 +50,19 @@ def generate_finetune_video(
 
         from diffusers import CogVideoXPipeline
 
+        # Prefer the base model recorded at train time (e.g. CogVideoX-2b on 16GB).
         base = cfg.base_t2v_model
+        if meta_path.exists():
+            try:
+                import torch as _torch
+
+                saved = _torch.load(meta_path, map_location="cpu", weights_only=False)
+                saved_base = (saved.get("meta") or {}).get("base_model")
+                if saved_base:
+                    base = saved_base
+            except Exception:
+                pass
+
         if log_fn:
             log_fn(f"Loading CogVideoX: {base}")
         pipe = CogVideoXPipeline.from_pretrained(base, torch_dtype=torch.float16)
