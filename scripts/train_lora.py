@@ -52,7 +52,12 @@ def main() -> None:
     parser.add_argument("--rebuild-manifest", action="store_true")
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument("--width", type=int, default=256)
-    parser.add_argument("--frames", type=int, default=8)
+    parser.add_argument(
+        "--frames",
+        type=int,
+        default=9,
+        help="Must be 8N+1 for CogVideoX (9, 17, 25, 49). Default 9 for 16GB.",
+    )
     parser.add_argument(
         "--low-vram",
         action="store_true",

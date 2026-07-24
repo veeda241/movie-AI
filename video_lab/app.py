@@ -571,17 +571,22 @@ Device: `{device}`
                 ft_log = gr.Textbox(label="Training log", lines=12)
                 ft_status = gr.Textbox(label="Adapter path", interactive=False)
 
-                gr.Markdown("---\n### Generate with LoRA")
+                gr.Markdown(
+                    "---\n### Generate with LoRA\n"
+                    "Uses CogVideoX native size (**720×480**, **49 frames**). "
+                    "Gray/purple mush usually meant the old research-DiT fallback — that is disabled now.\n"
+                    "If LoRA was trained at 8 frames / 256², prefer **Base only** once, then retrain with `--frames 9`.\n"
+                )
                 ft_prompt = gr.Textbox(
                     label="Prompt",
                     lines=3,
-                    value="a person blinking, realistic video",
+                    value="a person walking on a city street, realistic video",
                 )
                 with gr.Row():
-                    ft_steps_gen = gr.Slider(4, 50, value=20, step=1, label="Diffusion steps")
+                    ft_steps_gen = gr.Slider(20, 50, value=50, step=1, label="Diffusion steps")
                     ft_seed = gr.Number(value=42, label="Seed", precision=0)
-                    ft_duration = gr.Slider(0.5, 10, value=2.0, step=0.1, label="Duration (s)")
-                ft_gen_btn = gr.Button("Generate with LoRA", variant="secondary")
+                    ft_use_lora = gr.Checkbox(value=True, label="Apply LoRA adapter")
+                ft_gen_btn = gr.Button("Generate with CogVideoX", variant="secondary")
                 ft_video_out = gr.Video(label="Generated video", height=360)
 
                 # Wire up manifest builder
@@ -634,8 +639,8 @@ Device: `{device}`
                     outputs=[ft_log, ft_status],
                 )
 
-                # Wire up generation with LoRA
-                def _ui_generate_lora_fn(prompt, steps, seed, duration, log):
+                # Wire up generation with LoRA / base CogVideoX
+                def _ui_generate_lora_fn(prompt, steps, seed, use_lora, log):
                     lines: list[str] = []
                     def log_fn(msg: str):
                         lines.append(msg)
@@ -645,10 +650,12 @@ Device: `{device}`
                             prompt=prompt,
                             steps=int(steps),
                             seed=int(seed),
-                            frames=max(8, int(float(duration) * 12)),
-                            fps=12,
-                            height=256,
-                            width=256,
+                            frames=49,
+                            fps=8,
+                            height=480,
+                            width=720,
+                            use_lora=bool(use_lora),
+                            allow_fallback=False,
                             log_fn=log_fn,
                         )
                         for line in lines:
@@ -663,7 +670,7 @@ Device: `{device}`
 
                 ft_gen_btn.click(
                     _ui_generate_lora_fn,
-                    inputs=[ft_prompt, ft_steps_gen, ft_seed, ft_duration, ft_log],
+                    inputs=[ft_prompt, ft_steps_gen, ft_seed, ft_use_lora, ft_log],
                     outputs=[ft_log, ft_video_out],
                 )
 

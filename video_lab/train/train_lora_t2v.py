@@ -76,6 +76,12 @@ def _cuda_gb() -> float:
     return torch.cuda.get_device_properties(0).total_memory / 1e9
 
 
+def _cogvideox_frames(n: int) -> int:
+    """Official CogVideoX constraint: frame count must be 8N+1 (9, 17, 25, 49, …)."""
+    n = max(9, int(n))
+    return ((n - 1) // 8) * 8 + 1
+
+
 def train_lora_t2v(
     *,
     manifest_path: Path | None = None,
@@ -85,7 +91,7 @@ def train_lora_t2v(
     lr: float | None = None,
     height: int = 256,
     width: int = 256,
-    frames: int = 8,
+    frames: int = 9,
     low_vram: bool | None = None,
     log_fn=None,
 ) -> Path:
@@ -105,7 +111,7 @@ def train_lora_t2v(
     lr = lr or 1e-4
     height = max(64, int(height) - (int(height) % 16))
     width = max(64, int(width) - (int(width) % 16))
-    frames = max(8, int(frames) - (int(frames) % 4))
+    frames = _cogvideox_frames(frames)
     cfg.lora_dir.mkdir(parents=True, exist_ok=True)
 
     vram_gb = _cuda_gb()
@@ -315,7 +321,7 @@ def train_lora_t2v(
                 raise RuntimeError(
                     "CUDA OOM during LoRA step. Try:\n"
                     "  1) --base-model THUDM/CogVideoX-2b\n"
-                    "  2) --height 192 --width 192 --frames 8 --rank 8\n"
+                    "  2) --height 192 --width 192 --frames 9 --rank 8\n"
                     "  3) Close other GPU apps\n"
                     "  4) Use a 24GB+ GPU for CogVideoX-5b"
                 ) from None

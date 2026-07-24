@@ -1,118 +1,142 @@
-"""CogVideoX + LoRA generate (experimental). Falls back to research DiT if unavailable."""
+"""CogVideoX + LoRA generate (experimental)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from video_lab.config import LabConfig
-from video_lab.infer.research_generate import generate_research_video
+
+
+def _cogvideox_frames(n: int) -> int:
+    """CogVideoX requires frame counts of the form 8N+1 (9, 17, 25, 49, …)."""
+    n = max(9, int(n))
+    return ((n - 1) // 8) * 8 + 1
 
 
 def generate_finetune_video(
     prompt: str,
     *,
     seed: int = 0,
-    steps: int = 20,
+    steps: int = 50,
     frames: int | None = None,
     fps: int | None = None,
     height: int | None = None,
     width: int | None = None,
+    use_lora: bool = True,
+    allow_fallback: bool = False,
     log_fn=None,
 ) -> str:
-    """Prefer CogVideoX+LoRA when CUDA + adapter exist; else research DiT."""
+    """Generate with CogVideoX (+ optional LoRA). Does not silently use research DiT."""
     cfg = LabConfig()
-    frames = int(frames or cfg.frames)
-    fps = int(fps or cfg.fps)
-    height = int(height or cfg.height)
-    width = int(width or cfg.width)
     adapter_dir = cfg.lora_dir / "lora_adapter"
     meta_path = cfg.lora_dir / "lora_meta.pt"
 
+    # CogVideoX native defaults look decent; training meta can override if present.
+    base = cfg.base_t2v_model
+    height = 480 if height is None else int(height)
+    width = 720 if width is None else int(width)
+    frames = 49 if frames is None else _cogvideox_frames(frames)
+    fps = int(fps or 8)
+    height = max(64, height - (height % 16))
+    width = max(64, width - (width % 16))
+
+    if meta_path.exists():
+        try:
+            import torch as _torch
+
+            saved = _torch.load(meta_path, map_location="cpu", weights_only=False)
+            meta = saved.get("meta") or {}
+            if meta.get("base_model"):
+                base = meta["base_model"]
+        except Exception as exc:
+            if log_fn:
+                log_fn(f"Could not read {meta_path}: {exc}")
+
     def _fallback(reason: str) -> str:
+        if not allow_fallback:
+            raise RuntimeError(
+                f"{reason}\n"
+                "Refusing research-DiT fallback (that path produces gray mush). "
+                "Fix CogVideoX/LoRA load, or pass allow_fallback=True."
+            )
         if log_fn:
             log_fn(f"{reason} — using own-model DiT fallback.")
+        from video_lab.infer.research_generate import generate_research_video
+
         return generate_research_video(
             prompt,
             seed=seed,
             steps=steps,
-            frames=frames,
+            frames=max(8, frames // 4 * 4),
             fps=fps,
-            height=height,
-            width=width,
+            height=min(height, 256),
+            width=min(width, 256),
             log_fn=log_fn,
         )
 
     try:
         import torch
-
-        if not torch.cuda.is_available():
-            return _fallback("CUDA not available for CogVideoX")
-
         from diffusers import CogVideoXPipeline
+        from diffusers.utils import export_to_video
+    except Exception as exc:
+        return _fallback(f"CogVideoX imports failed ({exc})")
 
-        # Prefer the base model recorded at train time (e.g. CogVideoX-2b on 16GB).
-        base = cfg.base_t2v_model
-        if meta_path.exists():
-            try:
-                import torch as _torch
+    if not torch.cuda.is_available():
+        return _fallback("CUDA not available for CogVideoX")
 
-                saved = _torch.load(meta_path, map_location="cpu", weights_only=False)
-                saved_base = (saved.get("meta") or {}).get("base_model")
-                if saved_base:
-                    base = saved_base
-            except Exception:
-                pass
+    if log_fn:
+        log_fn(f"Loading CogVideoX: {base}")
+        log_fn(f"Infer size={width}x{height} frames={frames} steps={min(int(steps), 50)} seed={seed}")
 
-        if log_fn:
-            log_fn(f"Loading CogVideoX: {base}")
-        pipe = CogVideoXPipeline.from_pretrained(base, torch_dtype=torch.float16)
-        pipe.enable_model_cpu_offload()
+    pipe = CogVideoXPipeline.from_pretrained(base, torch_dtype=torch.float16)
+    pipe.enable_model_cpu_offload()
+    if hasattr(pipe.vae, "enable_tiling"):
+        pipe.vae.enable_tiling()
 
-        if adapter_dir.exists() and (adapter_dir / "adapter_config.json").exists():
+    loaded_lora = False
+    if use_lora and adapter_dir.exists() and (adapter_dir / "adapter_config.json").exists():
+        # Training saves via PEFT — load that way first.
+        try:
+            from peft import PeftModel
+
+            pipe.transformer = PeftModel.from_pretrained(pipe.transformer, str(adapter_dir))
+            loaded_lora = True
+            if log_fn:
+                log_fn(f"Loaded PEFT LoRA adapter: {adapter_dir}")
+        except Exception as exc:
             try:
                 pipe.transformer.load_adapter(str(adapter_dir))
                 if hasattr(pipe.transformer, "set_adapter"):
                     pipe.transformer.set_adapter("default")
+                loaded_lora = True
                 if log_fn:
                     log_fn(f"Loaded LoRA adapter: {adapter_dir}")
-            except Exception as exc:
-                # PEFT path used at train time
-                try:
-                    from peft import PeftModel
+            except Exception as exc2:
+                if log_fn:
+                    log_fn(f"Could not load LoRA ({exc} / {exc2}); generating with base only.")
+    elif use_lora and log_fn:
+        log_fn(f"No adapter at {adapter_dir} — generating with base CogVideoX only.")
 
-                    pipe.transformer = PeftModel.from_pretrained(pipe.transformer, str(adapter_dir))
-                    if log_fn:
-                        log_fn(f"Loaded PEFT LoRA adapter: {adapter_dir}")
-                except Exception as exc2:
-                    if log_fn:
-                        log_fn(f"Could not load LoRA adapter ({exc} / {exc2}); base CogVideoX only.")
-        elif meta_path.exists() and log_fn:
-            log_fn(f"Found {meta_path} but no adapter folder at {adapter_dir} — base model only.")
+    if log_fn and use_lora and not loaded_lora:
+        log_fn("WARNING: LoRA not applied; output is base CogVideoX.")
 
-        result = pipe(
-            prompt=prompt,
-            num_inference_steps=min(int(steps), 30),
-            guidance_scale=6.0,
-        )
-        frames_pil = result.frames[0]
-        import numpy as np
-        from PIL import Image
+    generator = torch.Generator(device="cuda").manual_seed(int(seed))
+    result = pipe(
+        prompt=prompt,
+        num_videos_per_prompt=1,
+        num_inference_steps=min(max(int(steps), 20), 50),
+        num_frames=frames,
+        height=height,
+        width=width,
+        guidance_scale=6.0,
+        generator=generator,
+    )
+    frames_pil = result.frames[0]
 
-        from video_lab.utils.video_io import write_rgb_video
-
-        arr = np.stack([np.asarray(f.convert("RGB"), dtype=np.uint8) for f in frames_pil], axis=0)
-        if arr.shape[0] != frames or arr.shape[1] != height or arr.shape[2] != width:
-            resized = []
-            for i in range(frames):
-                src_i = min(int(i * arr.shape[0] / max(frames, 1)), arr.shape[0] - 1)
-                img = Image.fromarray(arr[src_i]).resize((width, height), Image.BILINEAR)
-                resized.append(np.asarray(img, dtype=np.uint8))
-            arr = np.stack(resized, axis=0)
-        out = cfg.samples_dir / f"finetune_{seed}_{frames}f_{fps}fps.mp4"
-        cfg.samples_dir.mkdir(parents=True, exist_ok=True)
-        write_rgb_video(arr, out, fps=fps)
-        if log_fn:
-            log_fn(f"Wrote {out} ({frames / float(fps):.2f}s)")
-        return str(out)
-    except Exception as exc:
-        return _fallback(f"CogVideoX path unavailable ({exc})")
+    cfg.samples_dir.mkdir(parents=True, exist_ok=True)
+    tag = "lora" if loaded_lora else "base"
+    out = cfg.samples_dir / f"finetune_{tag}_{seed}_{frames}f_{width}x{height}.mp4"
+    export_to_video(frames_pil, str(out), fps=fps)
+    if log_fn:
+        log_fn(f"Wrote {out} ({frames / float(fps):.2f}s @ {width}x{height}, lora={loaded_lora})")
+    return str(out)
