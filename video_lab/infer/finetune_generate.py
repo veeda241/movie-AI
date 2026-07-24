@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from video_lab.config import LabConfig
 
 
@@ -23,15 +21,20 @@ def generate_finetune_video(
     height: int | None = None,
     width: int | None = None,
     use_lora: bool = True,
-    allow_fallback: bool = False,
     log_fn=None,
 ) -> str:
-    """Generate with CogVideoX (+ optional LoRA). Does not silently use research DiT."""
+    """Generate with CogVideoX (+ optional LoRA)."""
+    import torch
+    from diffusers import CogVideoXPipeline
+    from diffusers.utils import export_to_video
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for CogVideoX generation.")
+
     cfg = LabConfig()
     adapter_dir = cfg.lora_dir / "lora_adapter"
     meta_path = cfg.lora_dir / "lora_meta.pt"
 
-    # CogVideoX native defaults look decent; training meta can override if present.
     base = cfg.base_t2v_model
     height = 480 if height is None else int(height)
     width = 720 if width is None else int(width)
@@ -42,47 +45,13 @@ def generate_finetune_video(
 
     if meta_path.exists():
         try:
-            import torch as _torch
-
-            saved = _torch.load(meta_path, map_location="cpu", weights_only=False)
+            saved = torch.load(meta_path, map_location="cpu", weights_only=False)
             meta = saved.get("meta") or {}
             if meta.get("base_model"):
                 base = meta["base_model"]
         except Exception as exc:
             if log_fn:
                 log_fn(f"Could not read {meta_path}: {exc}")
-
-    def _fallback(reason: str) -> str:
-        if not allow_fallback:
-            raise RuntimeError(
-                f"{reason}\n"
-                "Refusing research-DiT fallback (that path produces gray mush). "
-                "Fix CogVideoX/LoRA load, or pass allow_fallback=True."
-            )
-        if log_fn:
-            log_fn(f"{reason} — using own-model DiT fallback.")
-        from video_lab.infer.research_generate import generate_research_video
-
-        return generate_research_video(
-            prompt,
-            seed=seed,
-            steps=steps,
-            frames=max(8, frames // 4 * 4),
-            fps=fps,
-            height=min(height, 256),
-            width=min(width, 256),
-            log_fn=log_fn,
-        )
-
-    try:
-        import torch
-        from diffusers import CogVideoXPipeline
-        from diffusers.utils import export_to_video
-    except Exception as exc:
-        return _fallback(f"CogVideoX imports failed ({exc})")
-
-    if not torch.cuda.is_available():
-        return _fallback("CUDA not available for CogVideoX")
 
     if log_fn:
         log_fn(f"Loading CogVideoX: {base}")
@@ -95,7 +64,6 @@ def generate_finetune_video(
 
     loaded_lora = False
     if use_lora and adapter_dir.exists() and (adapter_dir / "adapter_config.json").exists():
-        # Training saves via PEFT — load that way first.
         try:
             from peft import PeftModel
 

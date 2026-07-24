@@ -574,8 +574,7 @@ Device: `{device}`
                 gr.Markdown(
                     "---\n### Generate with LoRA\n"
                     "Uses CogVideoX native size (**720×480**, **49 frames**). "
-                    "Gray/purple mush usually meant the old research-DiT fallback — that is disabled now.\n"
-                    "If LoRA was trained at 8 frames / 256², prefer **Base only** once, then retrain with `--frames 9`.\n"
+                    "Uncheck **Apply LoRA** to test the base model alone.\n"
                 )
                 ft_prompt = gr.Textbox(
                     label="Prompt",
@@ -655,7 +654,6 @@ Device: `{device}`
                             height=480,
                             width=720,
                             use_lora=bool(use_lora),
-                            allow_fallback=False,
                             log_fn=log_fn,
                         )
                         for line in lines:
