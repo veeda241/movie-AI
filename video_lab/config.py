@@ -53,8 +53,17 @@ class LabConfig:
     dit_patch_w: int = 2
     train_stage: str = "stage2"  # stage1 | stage2 | stage3
 
-    # CogVideoX + LoRA (pre-trained model fine-tune)
-    base_t2v_model: str = "THUDM/CogVideoX-2b"
+    # Wan + LoRA (pre-trained model fine-tune)
+    # Wan2.1-T2V-1.3B is the smallest official Wan text-to-video model and is the
+    # only Wan checkpoint that fine-tunes (with LoRA) on consumer (~16GB) hardware.
+    # Wan native config: 832x480, 81 frames @ 16 fps, flow-matching.
+    # We use the diffusers-format checkpoint (-Diffusers suffix) which contains
+    # model_index.json + transformer/vae/text_encoder/tokenizer/scheduler folders.
+    base_t2v_model: str = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
+    wan_height: int = 480
+    wan_width: int = 832
+    wan_frames: int = 81
+    wan_fps: int = 16
     lora_rank: int = 16
     lora_steps: int = 100
 

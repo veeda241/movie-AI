@@ -5,7 +5,7 @@ directory so that the blocked C extension (``_regex.pyd``) is bypassed.
 The compiled ``_regex.cp312-win_amd64.pyd`` is often blocked by Windows
 Application Control policy when the project lives under ``Downloads``.  This
 helper writes a pure-Python replacement into the ``regex`` package so that
-``transformers`` and ``diffusers`` / ``CogVideoXPipeline`` can import without
+``transformers`` and ``diffusers`` / ``WanPipeline`` can import without
 crashing.
 
 Call ``ensure_regex_shim()`` at application startup *before* any code imports

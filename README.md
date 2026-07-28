@@ -102,9 +102,9 @@ GPU (recommended):
 .\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
 
-### Optional — CogVideo LoRA (experimental)
+### Optional — Wan LoRA (experimental)
 
-Separate from own VAE/DiT. Needs more disk/VRAM:
+Separate from own VAE/DiT. The smallest official Wan text-to-video model, trainable with LoRA on ~16GB VRAM:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-cogvideo.txt
@@ -123,7 +123,7 @@ Separate from own VAE/DiT. Needs more disk/VRAM:
 Open **http://127.0.0.1:7860**
 
 Tabs: Checklist → Data → Labels → Train → Generate  
-(Optional tab: **Experimental (CogVideo LoRA)**)
+(Optional tab: **Experimental (Wan LoRA)**)
 
 ### B) Movie Flow (product)
 
@@ -194,7 +194,7 @@ More detail: [docs/NICHE_TRAINING.md](docs/NICHE_TRAINING.md) · [docs/VIDEO_MOD
 | `requirements.txt` | Always (Movie Flow API / core) |
 | `requirements-video-lab.txt` | Own VAE/DiT Gradio lab |
 | `requirements-model.txt` | Extra generative / SDXL helpers |
-| `requirements-cogvideo.txt` | Experimental CogVideo LoRA only |
+| `requirements-cogvideo.txt` | Experimental Wan2.1-T2V-1.3B LoRA fine-tune only |
 
 ---
 
@@ -236,3 +236,4 @@ outputs/video_lab/   Local checkpoints + samples (gitignored)
 | Flat / meaningless generate | Train on real clips; use niche prompts; match 256 / ~8 frames |
 | No GPU in lab | Install CUDA torch (see §3) |
 | Movie Flow video looks fake | Set `HF_TOKEN` for remote Wan, or accept local fallback |
+| Wan LoRA OOM | Drop to `--frames 17 --height 256 --width 256 --rank 8` or use 24GB+ GPU |

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     storage_root: str = "./storage"
     jwt_secret: str = "change-me-to-a-long-random-string"
     jwt_expire_minutes: int = 10080
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,http://localhost:3004,http://localhost:3005,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:3002,http://127.0.0.1:3003"
     frontend_url: str = "http://localhost:3000"
 
     credit_cost_image: int = 1

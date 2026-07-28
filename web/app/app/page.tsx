@@ -15,8 +15,14 @@ import {
 
 const MODELS: Record<Mode, string[]> = {
   image: ["sdxl-local", "imagen-style"],
-  video: ["wan-2.2", "motif-local"],
+  video: ["wan-2.1-1.3b", "wan-2.2", "motif-local"],
   movie: ["scene-clip", "multi-agent"],
+};
+
+const VIDEO_MODEL_LABELS: Record<string, string> = {
+  "wan-2.1-1.3b": "Wan 2.1 1.3B (local)",
+  "wan-2.2": "Wan 2.2 (fal-ai)",
+  "motif-local": "Motif (local)",
 };
 
 export default function StudioPage() {
@@ -413,7 +419,7 @@ export default function StudioPage() {
                       ? "scene-clip (one at a time)"
                       : mode === "movie" && m === "multi-agent"
                         ? "multi-agent (auto all scenes)"
-                        : m}
+                        : (mode === "video" && VIDEO_MODEL_LABELS[m]) || m}
                   </option>
                 ))}
               </select>

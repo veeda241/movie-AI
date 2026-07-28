@@ -2,7 +2,7 @@
 
 Gradio toolkit for **our own** Causal 3D-VAE + Spatiotemporal DiT.
 
-The default path is local research training. An optional **Experimental (CogVideo LoRA)** tab can fine-tune CogVideoX; that is **not** the own-model path and needs `requirements-cogvideo.txt`.
+The default path is local research training. An optional **Experimental (Wan LoRA)** tab can fine-tune **Wan2.1-T2V-1.3B** with LoRA; that is **not** the own-model path and needs `requirements-cogvideo.txt`.
 
 ## Phases
 
@@ -10,7 +10,7 @@ The default path is local research training. An optional **Experimental (CogVide
 | --- | --- |
 | **A — Data** | Optical-flow filter, dense recaption, aspect buckets (letterbox) |
 | **B — Architecture** | Causal VAE (~8×S / 4×T), spacetime-patch DiT + RoPE-lite, curriculum |
-| **C — Optional** | CogVideo LoRA fine-tune; later DPO / distill / larger backbones |
+| **C — Optional** | Wan LoRA fine-tune; later DPO / distill / larger backbones |
 
 ## Run
 

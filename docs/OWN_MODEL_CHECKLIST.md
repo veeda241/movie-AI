@@ -24,7 +24,7 @@ Open Gradio **Checklist** for live ✅/⬜. This file mirrors the same list.
 
 ## Phase C — optional / later
 
-- Experimental CogVideoX LoRA (Gradio tab; separate from own VAE/DiT)  
+- Experimental Wan2.1-T2V-1.3B LoRA (Gradio tab; separate from own VAE/DiT)
 - Video DPO / RLAIF  
 - CFG / step distillation  
 - Multi-million clip ingest  

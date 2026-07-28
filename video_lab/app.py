@@ -546,11 +546,12 @@ Device: `{device}`
                     outputs=[train_log, ckpt_box],
                 )
 
-            with gr.Tab("Experimental (CogVideo LoRA)"):
+            with gr.Tab("Experimental (Wan LoRA)"):
                 gr.Markdown(
                     "### Optional — not the own-model path\n\n"
-                    "This tab fine-tunes **Hugging Face CogVideoX** (2B default / 5B if VRAM allows) "
-                    "with LoRA on your clips. Separate from Train VAE/DiT above. "
+                    "This tab fine-tunes **Hugging Face Wan2.1-T2V-1.3B** "
+                    "with LoRA on your clips — the smallest official Wan text-to-video "
+                    "model, trainable on ~16GB VRAM. Separate from Train VAE/DiT above. "
                     "Needs disk + CUDA (`pip install -r requirements-cogvideo.txt`).\n\n"
                     "**Workflow:** Build manifest → Train LoRA → Generate with LoRA.\n"
                     "Generate uses the base model recorded in `lora_meta.pt` (must match training).\n"
@@ -573,7 +574,7 @@ Device: `{device}`
 
                 gr.Markdown(
                     "---\n### Generate with LoRA\n"
-                    "Uses CogVideoX native size (**720×480**, **49 frames**). "
+                    "Uses Wan native size (**832x480**, **81 frames** @ 16 fps). "
                     "Uncheck **Apply LoRA** to test the base model alone.\n"
                 )
                 ft_prompt = gr.Textbox(
@@ -582,10 +583,10 @@ Device: `{device}`
                     value="a person walking on a city street, realistic video",
                 )
                 with gr.Row():
-                    ft_steps_gen = gr.Slider(20, 50, value=50, step=1, label="Diffusion steps")
+                    ft_steps_gen = gr.Slider(20, 50, value=30, step=1, label="Diffusion steps")
                     ft_seed = gr.Number(value=42, label="Seed", precision=0)
                     ft_use_lora = gr.Checkbox(value=True, label="Apply LoRA adapter")
-                ft_gen_btn = gr.Button("Generate with CogVideoX", variant="secondary")
+                ft_gen_btn = gr.Button("Generate with Wan", variant="secondary")
                 ft_video_out = gr.Video(label="Generated video", height=360)
 
                 # Wire up manifest builder
@@ -638,7 +639,7 @@ Device: `{device}`
                     outputs=[ft_log, ft_status],
                 )
 
-                # Wire up generation with LoRA / base CogVideoX
+                # Wire up generation with LoRA / base Wan
                 def _ui_generate_lora_fn(prompt, steps, seed, use_lora, log):
                     lines: list[str] = []
                     def log_fn(msg: str):
@@ -649,10 +650,10 @@ Device: `{device}`
                             prompt=prompt,
                             steps=int(steps),
                             seed=int(seed),
-                            frames=49,
-                            fps=8,
+                            frames=81,
+                            fps=16,
                             height=480,
-                            width=720,
+                            width=832,
                             use_lora=bool(use_lora),
                             log_fn=log_fn,
                         )

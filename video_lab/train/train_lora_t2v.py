@@ -1,4 +1,4 @@
-"""CogVideoX LoRA fine-tune (Diffusers + PEFT) with 16GB-friendly offload."""
+"""Wan2.1-T2V-1.3B LoRA fine-tune (Diffusers + PEFT), 16GB-friendly offload."""
 
 from __future__ import annotations
 
@@ -20,66 +20,86 @@ def _log(msg: str, log_fn=None) -> None:
         print(msg, flush=True)
 
 
-def _prepare_rotary(
-    *,
-    height: int,
-    width: int,
-    num_frames: int,
-    transformer,
-    device: torch.device,
-):
-    """Best-effort 3D RoPE for CogVideoX; returns None if unavailable."""
-    try:
-        from diffusers.models.embeddings import get_3d_rotary_pos_embed
-    except Exception:
-        return None
-
-    base = transformer.get_base_model() if hasattr(transformer, "get_base_model") else transformer
-    model_config = base.config
-    if not getattr(model_config, "use_rotary_positional_embeddings", False):
-        return None
-
-    vae_scale = 8
-    patch_size = int(getattr(model_config, "patch_size", 2))
-    attention_head_dim = int(getattr(model_config, "attention_head_dim", 64))
-    grid_h = height // (vae_scale * patch_size)
-    grid_w = width // (vae_scale * patch_size)
-    if grid_h < 1 or grid_w < 1:
-        return None
-
-    try:
-        return get_3d_rotary_pos_embed(
-            embed_dim=attention_head_dim,
-            crops_coords=None,
-            grid_size=(grid_h, grid_w),
-            temporal_size=num_frames,
-            device=device,
-        )
-    except TypeError:
-        try:
-            return get_3d_rotary_pos_embed(
-                embed_dim=attention_head_dim,
-                crops_coords=((0, 0), (grid_h, grid_w)),
-                grid_size=(grid_h, grid_w),
-                temporal_size=num_frames,
-                device=device,
-            )
-        except Exception:
-            return None
-    except Exception:
-        return None
-
-
 def _cuda_gb() -> float:
     if not torch.cuda.is_available():
         return 0.0
     return torch.cuda.get_device_properties(0).total_memory / 1e9
 
 
-def _cogvideox_frames(n: int) -> int:
-    """Official CogVideoX constraint: frame count must be 8N+1 (9, 17, 25, 49, …)."""
-    n = max(9, int(n))
-    return ((n - 1) // 8) * 8 + 1
+def _wan_frames(n: int) -> int:
+    """Wan temporal constraint: latent frames = (T-1)//4 + 1 (VAE temporal
+    downsample is 4). So T must be of the form 4N+1 (5, 9, 13, ... 81, ...).
+    Wan2.1 native uses 81 frames (5s @ 16fps)."""
+    n = max(5, int(n))
+    return ((n - 1) // 4) * 4 + 1
+
+
+def _wan_image_size(h: int, w: int) -> int:
+    """Wan VAE spatial downsample is 8 and transformer patch is 2x2, so H and W
+    must be divisible by 16."""
+    h = max(64, int(h) - (int(h) % 16))
+    w = max(64, int(w) - (int(w) % 16))
+    return h, w
+
+
+def _load_components(base_model: str, dtype):
+    """Load the four Wan pipeline components from the diffusers-format checkpoint."""
+    from diffusers import AutoencoderKLWan, UniPCMultistepScheduler, WanTransformer3DModel
+    from transformers import T5TokenizerFast, UMT5EncoderModel
+
+    vae = AutoencoderKLWan.from_pretrained(base_model, subfolder="vae", torch_dtype=dtype)
+    transformer = WanTransformer3DModel.from_pretrained(
+        base_model, subfolder="transformer", torch_dtype=dtype
+    )
+    text_encoder = UMT5EncoderModel.from_pretrained(
+        base_model, subfolder="text_encoder", torch_dtype=dtype
+    )
+    tokenizer = T5TokenizerFast.from_pretrained(base_model, subfolder="tokenizer")
+    # UniPCMultistepScheduler is the scheduler registered in the Wan model_index.json
+    scheduler = UniPCMultistepScheduler.from_pretrained(base_model, subfolder="scheduler")
+    return vae, transformer, text_encoder, tokenizer, scheduler
+
+
+def _encode_text(text_encoder, tokenizer, captions, max_len: int, device, dtype):
+    """Mirror WanPipeline.encode_prompt: pool, pad to max_len with zeros."""
+    from diffusers.pipelines.wan.pipeline_wan import prompt_clean
+
+    if isinstance(captions, str):
+        captions = [captions]
+    captions = [prompt_clean(c) for c in captions]
+    text_inputs = tokenizer(
+        captions,
+        padding="max_length",
+        max_length=max_len,
+        truncation=True,
+        add_special_tokens=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+    input_ids = text_inputs.input_ids.to(device)
+    mask = text_inputs.attention_mask.to(device)
+    seq_lens = mask.gt(0).sum(dim=1).long()
+
+    with torch.no_grad():
+        prompt_embeds = text_encoder(input_ids, mask).last_hidden_state.to(dtype=dtype)
+    # trim each row to its real sequence length, then zero-pad back to max_len
+    prompt_embeds = [u[: v.item()] for u, v in zip(prompt_embeds, seq_lens)]
+    prompt_embeds = torch.stack(
+        [torch.cat([u, u.new_zeros(max_len - u.size(0), u.size(1))]) for u in prompt_embeds],
+        dim=0,
+    )
+    return prompt_embeds
+
+
+def _normalize_latents(vae, latents):
+    """Wan maps the VAE latent space to the model prior via (latents - mean) * std,
+    where mean/std come from vae.config.latents_mean / latents_std. (Inverse of
+    the WanPipeline decode-time transform.)"""
+    mean = torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1)
+    std = torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1)
+    mean = mean.to(latents.device, dtype=latents.dtype)
+    std = std.to(latents.device, dtype=latents.dtype)
+    return (latents - mean) * std
 
 
 def train_lora_t2v(
@@ -89,17 +109,18 @@ def train_lora_t2v(
     steps: int | None = None,
     rank: int | None = None,
     lr: float | None = None,
-    height: int = 256,
-    width: int = 256,
-    frames: int = 9,
+    height: int | None = None,
+    width: int | None = None,
+    frames: int | None = None,
     low_vram: bool | None = None,
     log_fn=None,
 ) -> Path:
     """
-    CogVideoX LoRA fine-tuning using Diffusers + PEFT.
+    Wan2.1-T2V-1.3B LoRA fine-tuning using Diffusers + PEFT.
 
-    On ~16GB GPUs, VAE + T5 stay on CPU and only the transformer+LoRA
-    stays on CUDA (otherwise VAE encode OOMs with 5B weights resident).
+    On ~16GB GPUs the umt5 text encoder stays on CPU and the transformer + LoRA
+    stays resident on CUDA (VAE encode moves to CPU in low_vram). The 1.3B model
+    needs only ~8GB VRAM for inference; LoRA training is feasible on 16GB.
     """
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
@@ -109,9 +130,12 @@ def train_lora_t2v(
     steps = steps or cfg.lora_steps
     rank = rank or cfg.lora_rank
     lr = lr or 1e-4
-    height = max(64, int(height) - (int(height) % 16))
-    width = max(64, int(width) - (int(width) % 16))
-    frames = _cogvideox_frames(frames)
+
+    height = int(height) if height is not None else cfg.wan_height
+    width = int(width) if width is not None else cfg.wan_width
+    frames = int(frames) if frames is not None else cfg.wan_frames
+    height, width = _wan_image_size(height, width)
+    frames = _wan_frames(frames)
     cfg.lora_dir.mkdir(parents=True, exist_ok=True)
 
     vram_gb = _cuda_gb()
@@ -120,32 +144,32 @@ def train_lora_t2v(
 
     use_amp = torch.cuda.is_available() and torch.cuda.get_device_capability() >= (7, 0)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.float16 if use_amp else torch.float32
+    dtype = torch.bfloat16 if use_amp else torch.float32
 
-    _log(f"LoRA training: model={base_model} steps={steps} rank={rank} lr={lr} device={device}", log_fn)
+    _log(
+        f"Wan LoRA training: model={base_model} steps={steps} rank={rank} lr={lr} device={device}",
+        log_fn,
+    )
     _log(f"Size={width}x{height} frames={frames} low_vram={low_vram} vram~{vram_gb:.1f}GB", log_fn)
     _log(f"Manifest: {manifest_path}", log_fn)
 
-    from diffusers import CogVideoXPipeline
-    from peft import LoraConfig, get_peft_model
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is required for Wan fine-tuning. The 1.3B model + umt5 encoder "
+            "cannot train on CPU."
+        )
 
-    _log("Loading base model...", log_fn)
-    pipe = CogVideoXPipeline.from_pretrained(base_model, torch_dtype=dtype)
-
-    vae = pipe.vae
-    text_encoder = pipe.text_encoder
-    tokenizer = pipe.tokenizer
-    scheduler = pipe.scheduler
-    transformer = pipe.transformer
-    # Drop pipeline wrapper so we can free unused refs
-    del pipe
-    gc.collect()
-    if device == "cuda":
-        torch.cuda.empty_cache()
+    _log("Loading Wan components...", log_fn)
+    vae, transformer, text_encoder, tokenizer, _scheduler = _load_components(base_model, dtype)
+    # Ensure VAE config has scale_factor_* (older 0.33-era checkpoint omits them).
+    for _key, _default in (("scale_factor_temporal", 4), ("scale_factor_spatial", 8)):
+        if _key not in vae.config:
+            vae.config[_key] = _default
+            vae.register_to_config(**{_key: _default})
 
     # Memory plan: only transformer on GPU when low_vram
-    if low_vram and device == "cuda":
-        _log("low_vram: VAE + text encoder on CPU; transformer+LoRA on CUDA", log_fn)
+    if low_vram:
+        _log("low_vram: umt5 + VAE on CPU; transformer+LoRA on CUDA", log_fn)
         vae.to("cpu", dtype=torch.float32)
         text_encoder.to("cpu", dtype=torch.float32)
         transformer.to(device, dtype=dtype)
@@ -163,20 +187,25 @@ def train_lora_t2v(
     text_encoder.requires_grad_(False)
     text_encoder.eval()
 
-    _log(f"Model loaded. Transformer params: {sum(p.numel() for p in transformer.parameters()):,}", log_fn)
+    _log(f"Transformer params: {sum(p.numel() for p in transformer.parameters()):,}", log_fn)
 
-    try:
-        import tiktoken  # noqa: F401
-    except ImportError as exc:
-        raise ImportError(
-            "CogVideoX tokenizer needs tiktoken. Install: pip install tiktoken sentencepiece"
-        ) from exc
+    from peft import LoraConfig, get_peft_model
 
+    # LoRA target every transformer block by suffix match:
+    #   - self/cross attention:  to_q, to_k, to_v, to_out.0
+    #   - FFN (FeedForward):     ffn.net.0.proj (in-projection), ffn.net.2 (out-projection)
     lora_config = LoraConfig(
         r=rank,
         lora_alpha=rank,
         init_lora_weights=True,
-        target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+        target_modules=[
+            "to_q",
+            "to_k",
+            "to_v",
+            "to_out.0",
+            "ffn.net.0.proj",
+            "ffn.net.2",
+        ],
         lora_dropout=0.05,
         bias="none",
     )
@@ -195,7 +224,7 @@ def train_lora_t2v(
         bucket="square_256" if height == 256 and width == 256 else None,
         letterbox=True,
     )
-    batch_size = 1  # keep 1 for CogVideoX LoRA on consumer GPUs
+    batch_size = 1
     _log(f"Dataset: {len(dataset)} clips, batch_size={batch_size}", log_fn)
     if len(dataset) == 0:
         raise RuntimeError(f"Empty dataset from manifest: {manifest_path}")
@@ -208,16 +237,14 @@ def train_lora_t2v(
         betas=(0.9, 0.95),
         weight_decay=1e-2,
     )
-    scheduler_t = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps, eta_min=lr * 0.01)
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps, eta_min=lr * 0.01)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp and device == "cuda")
 
     transformer.train()
     global_step = 0
     losses: list[float] = []
     start_time = time.time()
-    base_cfg = transformer.get_base_model().config
-    max_text_len = int(getattr(base_cfg, "max_text_seq_length", 226))
-    scaling = float(getattr(vae.config, "scaling_factor", 1.0))
+    max_text_len = 226  # Wan default max_sequence_length
 
     while global_step < steps:
         for batch in loader:
@@ -227,78 +254,56 @@ def train_lora_t2v(
             optimizer.zero_grad(set_to_none=True)
 
             captions = batch["caption"]
-            if isinstance(captions, str):
-                captions = [captions]
-            videos = batch["video"]  # (B, C, T, H, W) float CPU/GPU tensor
+            videos = batch["video"]  # (1, 3, T, H, W) in [-1, 1]
 
-            # --- text embeds (CPU in low_vram) ---
-            text_inputs = tokenizer(
-                list(captions),
-                padding="max_length",
-                max_length=max_text_len,
-                truncation=True,
-                add_special_tokens=True,
-                return_tensors="pt",
-            )
+            # --- text embeds ---
             text_device = "cpu" if low_vram else device
-            text_inputs = {k: v.to(text_device) for k, v in text_inputs.items()}
-            with torch.no_grad():
-                encoder_hidden_states = text_encoder(**text_inputs)[0]
-                encoder_hidden_states = encoder_hidden_states.to(device, dtype=dtype).detach()
+            text_encoder.to(text_device)  # ensure encoder on right device for encode
+            prompt_embeds = _encode_text(
+                text_encoder, tokenizer, list(captions), max_text_len, text_device, dtype
+            )
+            prompt_embeds = prompt_embeds.to(device, dtype=dtype).detach()
 
-            # --- VAE encode (CPU in low_vram to free GPU for transformer) ---
+            # --- VAE encode -> Wan latent prior ---
             with torch.no_grad():
                 if low_vram:
+                    vae.to("cpu", dtype=torch.float32)
                     vid = videos.float().cpu()
-                    latent_dist = vae.encode(vid).latent_dist
-                    latents = latent_dist.sample() * scaling
-                    latents = latents.to(device, dtype=dtype)
+                    latents = vae.encode(vid).latents
+                    latents = _normalize_latents(vae, latents).to(device, dtype=dtype)
+                    vae.to("cpu")  # keep VAE on CPU between steps in low_vram
                 else:
                     vid = videos.to(device, dtype=dtype)
-                    latent_dist = vae.encode(vid).latent_dist
-                    latents = latent_dist.sample() * scaling
-                # Transformer expects [B, F, C, H, W]
-                latents = latents.permute(0, 2, 1, 3, 4).contiguous()
+                    latents = vae.encode(vid).latents
+                    latents = _normalize_latents(vae, latents)
 
             del videos
             if device == "cuda":
                 torch.cuda.empty_cache()
 
             noise = torch.randn_like(latents)
-            bsz, num_frames, _c, _lh, _lw = latents.shape
-            timesteps = torch.randint(
-                0, int(scheduler.config.num_train_timesteps), (bsz,), device=device
-            ).long()
-            noisy_latents = scheduler.add_noise(latents, noise, timesteps)
+            bsz = latents.shape[0]
 
-            image_rotary_emb = _prepare_rotary(
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                transformer=transformer,
-                device=torch.device(device),
-            )
+            # Wan uses flow-matching: train a velocity field. Sample t in [0,1].
+            timesteps = torch.rand((bsz,), device=device)
+            t_exp = timesteps.view(bsz, *[1] * (latents.ndim - 1))
+            # Flow-matching: x_t = (1 - t) * x0 + t * noise ; target v = noise - x0
+            noisy_latents = (1.0 - t_exp) * latents + t_exp * noise
 
             def _forward():
                 out = transformer(
                     hidden_states=noisy_latents,
-                    encoder_hidden_states=encoder_hidden_states,
                     timestep=timesteps,
-                    image_rotary_emb=image_rotary_emb,
+                    encoder_hidden_states=prompt_embeds,
                     return_dict=False,
                 )[0]
-                model_pred = scheduler.get_velocity(out, noisy_latents, timesteps)
-                alphas_cumprod = scheduler.alphas_cumprod.to(device=device, dtype=model_pred.dtype)
-                weights = 1.0 / (1.0 - alphas_cumprod[timesteps]).clamp_min(1e-4)
-                while weights.ndim < model_pred.ndim:
-                    weights = weights.unsqueeze(-1)
-                return torch.mean(
-                    (weights * (model_pred - latents) ** 2).reshape(bsz, -1), dim=1
-                ).mean()
+                target = noise - latents
+                loss = ((out.float() - target.float()) ** 2).mean()
+                return loss
 
             try:
-                if use_amp and device == "cuda":
-                    with torch.amp.autocast("cuda", dtype=torch.float16):
+                if use_amp:
+                    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                         loss = _forward()
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
@@ -319,16 +324,15 @@ def train_lora_t2v(
                 if device == "cuda":
                     torch.cuda.empty_cache()
                 raise RuntimeError(
-                    "CUDA OOM during LoRA step. Try:\n"
-                    "  1) --base-model THUDM/CogVideoX-2b\n"
-                    "  2) --height 192 --width 192 --frames 9 --rank 8\n"
-                    "  3) Close other GPU apps\n"
-                    "  4) Use a 24GB+ GPU for CogVideoX-5b"
+                    "CUDA OOM during Wan LoRA step. Try:\n"
+                    "  1) --frames 17 --height 256 --width 256 --rank 8\n"
+                    "  2) Close other GPU apps\n"
+                    "  3) A 24GB+ GPU for full 832x480x81 training"
                 ) from None
 
             losses.append(float(loss.detach().item()))
             global_step += 1
-            scheduler_t.step()
+            cosine.step()
 
             if global_step % 10 == 0:
                 elapsed = time.time() - start_time

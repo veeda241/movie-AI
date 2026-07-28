@@ -1,14 +1,14 @@
 #!/usr/bin/env python
-"""CogVideoX LoRA fine-tune on HF Wan action clips.
+r"""Wan2.1-T2V-1.3B LoRA fine-tune on HF Wan action clips.
 
 Examples (PowerShell) — 16GB GPU (recommended):
-  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --base-model THUDM/CogVideoX-2b --steps 1000 --rank 16 --low-vram
+  .\.venv\Scripts\python.exe scripts\train_lora.py --steps 1000 --rank 16 --low-vram
 
-  # CogVideoX-5b on 16GB (tight; uses CPU VAE/text offload):
-  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --base-model THUDM/CogVideoX-5b --steps 1000 --rank 8 --height 192 --width 192 --low-vram
+  # Smaller size for tight VRAM:
+  .\.venv\Scripts\python.exe scripts\train_lora.py --steps 1000 --rank 8 --height 256 --width 256 --frames 17 --low-vram
 
-  # 24GB+ GPU:
-  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --base-model THUDM/CogVideoX-5b --steps 1000 --rank 16
+  # 24GB+ GPU (full native 832x480x81):
+  .\.venv\Scripts\python.exe scripts\train_lora.py --steps 1000 --rank 16
 """
 
 from __future__ import annotations
@@ -32,39 +32,41 @@ except Exception:
     pass
 
 from video_lab import RAW_DIR, DATA_ROOT
+from video_lab.config import LabConfig
 from video_lab.data.hf_wan_datasets import build_hf_wan_manifest
-from video_lab.train.train_lora_t2v import train_lora_t2v
+from video_lab.train.train_lora_t2v import _wan_frames, _wan_image_size, train_lora_t2v
 from video_lab.utils.device import get_device
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="CogVideoX LoRA fine-tune on HF Wan actions")
+    cfg = LabConfig()
+    parser = argparse.ArgumentParser(description="Wan2.1-T2V-1.3B LoRA fine-tune on HF Wan actions")
     parser.add_argument("--steps", type=int, default=200, help="Training steps (default: 200)")
     parser.add_argument("--rank", type=int, default=16, help="LoRA rank (default: 16)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument(
         "--base-model",
         type=str,
-        default="THUDM/CogVideoX-2b",
-        help="Base model ID (default: CogVideoX-2b for 16GB GPUs; use 5b on 24GB+)",
+        default=cfg.base_t2v_model,
+        help=f"Base model ID (default: {cfg.base_t2v_model} — diffusers-format Wan2.1-1.3B)",
     )
     parser.add_argument("--manifest-path", type=str, default=None)
     parser.add_argument("--rebuild-manifest", action="store_true")
-    parser.add_argument("--height", type=int, default=256)
-    parser.add_argument("--width", type=int, default=256)
+    parser.add_argument("--height", type=int, default=cfg.wan_height, help=f"Frame height, must be /16 (default {cfg.wan_height})")
+    parser.add_argument("--width", type=int, default=cfg.wan_width, help=f"Frame width, must be /16 (default {cfg.wan_width})")
     parser.add_argument(
         "--frames",
         type=int,
-        default=9,
-        help="Must be 8N+1 for CogVideoX (9, 17, 25, 49). Default 9 for 16GB.",
+        default=cfg.wan_frames,
+        help=f"Must be 4N+1 for Wan (5, 9, 13, ... 81). Default {cfg.wan_frames} (native).",
     )
     parser.add_argument(
         "--low-vram",
         action="store_true",
         default=None,
-        help="Force CPU offload for VAE/text (auto-on if GPU < 20GB)",
+        help="Force CPU offload for umt5/VAE (auto-on if GPU < 20GB)",
     )
-    parser.add_argument("--no-low-vram", action="store_true", help="Keep VAE/text on GPU")
+    parser.add_argument("--no-low-vram", action="store_true", help="Keep umt5/VAE on GPU")
     args = parser.parse_args()
 
     low_vram: bool | None
@@ -75,11 +77,14 @@ def main() -> None:
     else:
         low_vram = None  # auto
 
+    height, width = _wan_image_size(args.height, args.width)
+    frames = _wan_frames(args.frames)
+
     device = get_device()
     print(f"device={device}")
     print(f"Steps={args.steps} Rank={args.rank} LR={args.lr}")
     print(f"Base model: {args.base_model}")
-    print(f"Size={args.width}x{args.height} frames={args.frames} low_vram={low_vram}")
+    print(f"Size={width}x{height} frames={frames} low_vram={low_vram}")
 
     if args.manifest_path:
         manifest_path = Path(args.manifest_path)
@@ -102,21 +107,21 @@ def main() -> None:
     def log(msg: str) -> None:
         print(msg, flush=True)
 
-    print("\n--- Starting LoRA training ---")
+    print("\n--- Starting Wan LoRA training ---")
     result = train_lora_t2v(
         manifest_path=manifest_path,
         base_model=args.base_model,
         steps=args.steps,
         rank=args.rank,
         lr=args.lr,
-        height=args.height,
-        width=args.width,
-        frames=args.frames,
+        height=height,
+        width=width,
+        frames=frames,
         low_vram=low_vram,
         log_fn=log,
     )
     print(f"\nLoRA adapter saved to: {result}")
-    print("Done. Gradio → Experimental (CogVideo LoRA) → Generate with LoRA.")
+    print("Done. Gradio -> Experimental (Wan LoRA) -> Generate with Wan.")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,20 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+# The patched Wan2.1-T2V-1.3B generator lives only in the top-level video_lab/
+# package, not the older copy bundled inside this directory (movie-AI-lab/).
+# Walk up from this file to find the directory containing video_lab/__init__.py
+# and prefer it on sys.path so `import video_lab` resolves to the working Wan
+# pipeline regardless of which copy of the api package is launched.
+_file_dir = Path(__file__).resolve().parent
+for _candidate in (_file_dir.parents[0], *_file_dir.parents):
+    if (_candidate / "video_lab" / "__init__.py").exists() and not _candidate.name.endswith("movie-AI-lab"):
+        if str(_candidate) not in sys.path:
+            sys.path.insert(0, str(_candidate))
+        break
 
 from sqlalchemy.orm import Session
 
@@ -11,6 +24,9 @@ from api.services import credits as credit_service
 from movie_pipeline.models.image_client import ImageGenerationClient
 from movie_pipeline.pipeline.orchestrator import Orchestrator
 from movie_pipeline.video.motif_client import MotifClient
+
+# Model id surfaced in the web UI for the local Wan 2.1 1.3B generator.
+WAN_1_3B_MODEL_ID = "wan-2.1-1.3b"
 
 
 def project_storage(user_id: str, project_id: str) -> Path:
@@ -140,6 +156,46 @@ def run_image_job(db: Session, job_id: str) -> None:
         set_job_status(db, job, JobStatus.failed, str(exc))
 
 
+def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
+    """Run the patched local Wan2.1-T2V-1.3B pipeline (`generate_finetune_video`)
+    and write the resulting mp4 to `out_path` (returns the Wan samples path; the
+    caller then copies it into project storage)."""
+    import shutil
+
+    # Lazy import keeps the API light and surfaces clean errors if the user
+    # picks Wan without CUDA / deps installed.
+    from video_lab.infer.finetune_generate import generate_finetune_video
+
+    def _log(msg: str) -> None:
+        # Best-effort DB logger; events land in the same job row so the front-end
+        # progress drawer can show "Loading Wan: ...", "Loaded PEFT LoRA ...", etc.
+        try:
+            append_job_event(db, job, msg)
+        except Exception:
+            pass
+
+    seed = int.from_bytes(job.id.encode("utf-8")[:8], "big") % (2**32)
+
+    wan_path = generate_finetune_video(
+        job.prompt,
+        seed=seed,
+        steps=30,
+        frames=81,
+        fps=16,
+        height=480,
+        width=832,
+        use_lora=False,
+        log_fn=_log,
+    )
+
+    if not wan_path or not Path(wan_path).exists():
+        raise RuntimeError(f"Wan generator returned no file: {wan_path!r}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(wan_path, out_path)
+    return str(out_path)
+
+
 def run_video_job(db: Session, job_id: str) -> None:
     job = db.get(Job, job_id)
     if job is None:
@@ -171,8 +227,11 @@ def run_video_job(db: Session, job_id: str) -> None:
             clip_index += 1
 
         out_path = out_dir / "videos" / f"clip_{clip_index:02d}_{job.id[:8]}.mp4"
-        client = MotifClient(output_dir=out_dir / "videos")
-        path = client.generate(job.prompt, scene_number=clip_index, output_path=out_path)
+        if job.model == WAN_1_3B_MODEL_ID:
+            path = _generate_with_local_wan(db, job, out_path)
+        else:
+            client = MotifClient(output_dir=out_dir / "videos")
+            path = client.generate(job.prompt, scene_number=clip_index, output_path=out_path)
         if not path:
             raise RuntimeError("Video generation produced no file")
         asset = create_asset(

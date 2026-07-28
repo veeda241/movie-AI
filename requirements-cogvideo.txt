@@ -1,5 +1,5 @@
 # =============================================================================
-#  CogVideoX-5B LoRA Fine-Tuning — Requirements
+#  Wan2.1-T2V-1.3B LoRA Fine-Tuning — Requirements
 # =============================================================================
 # Install with:
 #   pip install -r requirements-cogvideo.txt
@@ -8,21 +8,21 @@
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 # Then run the above pip install command.
 #
-# Tested with Python 3.10+ on CUDA 12.x and 24GB+ VRAM.
+# Tested with Python 3.10+ on CUDA 12.x and ~16GB+ VRAM (Wan 1.3B).
 # =============================================================================
 
 # ── Core ML ──────────────────────────────────────────────────────────────────
 torch>=2.0.0                          # PyTorch (CUDA version recommended)
 torchvision                           # PyTorch vision utilities
-diffusers>=0.30.0                     # CogVideoX pipeline, VAE, transformer
+diffusers>=0.31.0                     # WanPipeline, AutoencoderKLWan, WanTransformer3DModel
 peft>=0.12.0                          # LoRA adapter (PEFT)
 accelerate>=0.30.0                    # Device placement, mixed precision, AMP
-transformers>=4.40.0                  # T5 text encoder for CogVideoX-5B
+transformers>=4.41.0                  # T5 text encoder for Wan
 safetensors                           # Safe weight serialization format
 
-# ── CogVideoX Tokenizer ─────────────────────────────────────────────────────
-tiktoken                              # T5 tokenizer dependency (CogVideoX-5B)
-sentencepiece                         # Also required by T5 tokenizer
+# ── Tokenizer ────────────────────────────────────────────────────────────────
+sentencepiece                         # T5 tokenizer dependency
+tiktoken                              # Used by some video tokenizers
 
 # ── Video & Image Processing ─────────────────────────────────────────────────
 opencv-python-headless                # Video reading, dimension probing (cv2)
