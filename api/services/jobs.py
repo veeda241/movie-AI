@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -162,10 +163,6 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
     caller then copies it into project storage)."""
     import shutil
 
-    # Lazy import keeps the API light and surfaces clean errors if the user
-    # picks Wan without CUDA / deps installed.
-    from video_lab.infer.finetune_generate import generate_finetune_video
-
     def _log(msg: str) -> None:
         # Best-effort DB logger; events land in the same job row so the front-end
         # progress drawer can show "Loading Wan: ...", "Loaded PEFT LoRA ...", etc.
@@ -174,16 +171,98 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
         except Exception:
             pass
 
+    _log("Pre-flight: checking CUDA…")
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is not available. The local Wan 2.1 1.3B model requires an NVIDIA GPU. "
+                "Pick a different video model (wan-2.2 / motif-local) or run on a CUDA host."
+            )
+        _log(f"Pre-flight: CUDA ok ({torch.cuda.get_device_name(0)})")
+    except ImportError:
+        raise RuntimeError(
+            "PyTorch is not installed. Install requirements-model.txt to use the local Wan model."
+        )
+
+    # Lazy import keeps the API light and surfaces clean errors if the user
+    # picks Wan without CUDA / deps installed.
+    from video_lab.infer.finetune_generate import generate_finetune_video
+    from video_lab.config import LabConfig
+
+    cfg = LabConfig()
+    base = cfg.base_t2v_model
+
+    # Wipe stale .no_exist entries so a partial-failed download from a previous
+    # attempt doesn't poison this run (caused the >24h hang we just diagnosed).
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        no_exist = Path(HF_HUB_CACHE) / ("models--" + base.replace("/", "--")) / ".no_exist"
+        if no_exist.exists():
+            shutil.rmtree(no_exist, ignore_errors=True)
+            _log(f"Cleared stale .no_exist cache at {no_exist}")
+    except Exception as cache_exc:
+        _log(f"Cache cleanup skipped: {cache_exc}")
+
+    # Pre-fetch the snapshot with visible per-file progress. Without this the
+    # worker would silently block inside AutoencoderKLWan.from_pretrained etc.
+    # for hours with no progress events.
+    try:
+        from huggingface_hub import snapshot_download
+
+        def _tqdm(msg_callback):
+            try:
+                from tqdm.auto import tqdm as _tqdm_lib
+            except ImportError:
+                return None
+
+            class _Wrap(_tqdm_lib):
+                def update(self, n=1.0):  # type: ignore[override]
+                    res = super().update(n)
+                    msg_callback(
+                        f"Downloading {self.desc or 'file'}: "
+                        f"{self.n:,}/{self.total:,} bytes ({100 * self.n / max(self.total, 1):.0f}%)"
+                    )
+                    return res
+
+            return _Wrap
+
+        _log(f"Pre-fetching Wan model: {base} (~12 GB on first run)")
+        snapshot_download(
+            repo_id=base,
+            allow_patterns=[
+                "text_encoder/*.json",
+                "text_encoder/*.safetensors",
+                "tokenizer/*",
+                "transformer/*",
+                "vae/*",
+                "scheduler/*",
+                "model_index.json",
+            ],
+            tqdm_class=_tqdm(_log),
+            max_workers=2,
+        )
+        _log("Wan model files present in cache")
+    except Exception as dl_exc:
+        raise RuntimeError(
+            f"Failed to download Wan model {base!r}: {dl_exc}. "
+            f"Run `python scripts/download_wan.py --clear-no-exist` to retry manually."
+        ) from dl_exc
+
     seed = int.from_bytes(job.id.encode("utf-8")[:8], "big") % (2**32)
+
+    _log("Building Wan pipeline (loading weights into VRAM)…")
 
     wan_path = generate_finetune_video(
         job.prompt,
         seed=seed,
-        steps=30,
-        frames=81,
-        fps=16,
-        height=480,
-        width=832,
+        steps=int(os.environ.get("WAN_STEPS", "30")),
+        frames=int(os.environ.get("WAN_FRAMES", "81")),
+        fps=int(os.environ.get("WAN_FPS", "16")),
+        height=int(os.environ.get("WAN_HEIGHT", "480")),
+        width=int(os.environ.get("WAN_WIDTH", "832")),
         use_lora=False,
         log_fn=_log,
     )
@@ -366,6 +445,14 @@ def run_movie_job(db: Session, job_id: str) -> None:
         return
 
     set_job_status(db, job, JobStatus.running)
+    if not os.environ.get("HF_TOKEN", "").strip():
+        append_job_event(
+            db,
+            job,
+            "HF_TOKEN not set — using local planning (3 deterministic scenes) "
+            "and the local 'placeholder' video fallback. Set HF_TOKEN in .env "
+            "for LLM-driven planning and real video generation.",
+        )
     out_dir = project_storage(user.id, project.id) / "scenes"
     asset_ids: list[str] = []
     video_clip_ids: list[str] = []

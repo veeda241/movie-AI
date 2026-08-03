@@ -159,15 +159,37 @@ def generate_finetune_video(
 
     generator = torch.Generator(device="cpu").manual_seed(int(seed))
     # Wan recommends guidance_scale=6 for the 1.3B model
+    total_steps = min(max(int(steps), 20), 50)
+    if log_fn:
+        log_fn(
+            f"Diffusion: {frames} frames @ {width}x{height}, {total_steps} steps "
+            f"(this can take 5-15 min on RTX 5060 Ti / 16GB)"
+        )
+        last_logged = {"step": -1}
+
+        def _progress_cb(pipe_, step: int, timestep, callback_kwargs):  # type: ignore[no-untyped-def]
+            # Throttle to one event every ~2 steps so we don't spam the DB.
+            if step - last_logged["step"] >= 2 or step == total_steps - 1:
+                last_logged["step"] = step
+                pct = 100.0 * (step + 1) / total_steps
+                if log_fn:
+                    log_fn(f"Diffusion step {step + 1}/{total_steps} ({pct:.0f}%)")
+            return callback_kwargs
+
+    else:
+        def _progress_cb(pipe_, step, timestep, callback_kwargs):  # type: ignore[no-untyped-def]
+            return callback_kwargs
+
     result = pipe(
         prompt=prompt,
         num_videos_per_prompt=1,
-        num_inference_steps=min(max(int(steps), 20), 50),
+        num_inference_steps=total_steps,
         num_frames=frames,
         height=height,
         width=width,
         guidance_scale=6.0,
         generator=generator,
+        callback_on_step_end=_progress_cb,
     )
     frames_pil = result.frames[0]
 

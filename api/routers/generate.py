@@ -46,9 +46,27 @@ def _get_project(db: Session, user: User, project_id: str) -> Project:
 
 
 def _run_in_bg(runner, job_id: str) -> None:
+    import traceback
+
+    from api.models import Job, JobStatus
+    from api.services.jobs import append_job_event, set_job_status
+
     db = SessionLocal()
     try:
         runner(db, job_id)
+    except Exception as exc:
+        # BackgroundTasks in FastAPI does NOT surface worker-thread exceptions
+        # to the API logs reliably. If a job runner crashes *before* it can mark
+        # itself failed, the job would otherwise stay "queued"/"running" forever.
+        # Catch everything here and stamp the job as failed so the UI can recover.
+        try:
+            job = db.get(Job, job_id)
+            if job is not None and job.status in {JobStatus.queued, JobStatus.running}:
+                append_job_event(db, job, f"Worker crashed before completion: {exc}")
+                set_job_status(db, job, JobStatus.failed, f"{exc}\n{traceback.format_exc()[:1500]}")
+        except Exception:
+            pass
+        traceback.print_exc()
     finally:
         db.close()
 

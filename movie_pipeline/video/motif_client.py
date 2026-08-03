@@ -6,10 +6,26 @@ import os
 import random
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 from typing import Any, cast
 
 from huggingface_hub import InferenceClient
+
+# When remote HF Inference returns 503 "model is loading", retry a few times
+# with backoff instead of dropping straight to the local fake-video fallback.
+REMOTE_MAX_RETRIES = int(os.environ.get("HF_VIDEO_REMOTE_MAX_RETRIES", "4"))
+REMOTE_RETRY_DELAY_SECONDS = int(os.environ.get("HF_VIDEO_REMOTE_RETRY_DELAY", "15"))
+
+
+def _local_fallback_allowed() -> bool:
+    """Whether to fall back to a PIL/ffmpeg fake video when remote fails.
+
+    Set ``HF_ALLOW_LOCAL_FALLBACK=false`` to make remote failures surface as
+    a job failure instead of silently producing a misleading gradient clip.
+    """
+    flag = os.environ.get("HF_ALLOW_LOCAL_FALLBACK", "true").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
 
 
 class MotifClient:
@@ -39,15 +55,44 @@ class MotifClient:
         target = Path(output_path) if output_path is not None else self.output_dir / f"scene_{scene_number}_video.mp4"
         target.parent.mkdir(parents=True, exist_ok=True)
 
+        last_error: Exception | None = None
         if self.token.strip():
-            try:
-                remote_video = self._generate_remote_video(video_prompt, scene_number)
-                if remote_video:
-                    return self._write_video_file(target, remote_video)
-            except Exception as exc:
-                print(f"[MotifClient] scene {scene_number} remote video failed: {exc}", flush=True)
+            for attempt in range(1, REMOTE_MAX_RETRIES + 1):
+                try:
+                    remote_video = self._generate_remote_video(video_prompt, scene_number)
+                    if remote_video:
+                        return self._write_video_file(target, remote_video)
+                    last_error = RuntimeError("remote returned no video bytes")
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status_code == 503 and attempt < REMOTE_MAX_RETRIES:
+                        print(
+                            f"[MotifClient] scene {scene_number} HF model loading (503), "
+                            f"retrying in {REMOTE_RETRY_DELAY_SECONDS}s ({attempt}/{REMOTE_MAX_RETRIES})",
+                            flush=True,
+                        )
+                        time.sleep(REMOTE_RETRY_DELAY_SECONDS)
+                        continue
+                    print(
+                        f"[MotifClient] scene {scene_number} remote video failed "
+                        f"(provider={self.REMOTE_PROVIDER} model={self.REMOTE_MODEL}): {exc}",
+                        flush=True,
+                    )
+                    break
         else:
-            print(f"[MotifClient] scene {scene_number} missing HF_TOKEN, using local fallback.", flush=True)
+            print(
+                f"[MotifClient] scene {scene_number} HF_TOKEN missing; "
+                f"set HF_TOKEN to enable real video generation.",
+                flush=True,
+            )
+
+        if not _local_fallback_allowed():
+            raise RuntimeError(
+                f"Remote text-to-video failed and HF_ALLOW_LOCAL_FALLBACK=false; "
+                f"refusing to produce a fake video. last_error={last_error}"
+            )
 
         try:
             return self._generate_local_video(video_prompt, scene_number, target)
@@ -262,8 +307,8 @@ class MotifClient:
             spacing=4,
         )
 
-        footer = "Local cinematic fallback"
-        draw.text((panel_left + 22, panel_bottom - 30), footer, font=font_body, fill=(184, 204, 255, 170))
+        footer = "⚠ PLACEHOLDER — set HF_TOKEN for a real video"
+        draw.text((panel_left + 22, panel_bottom - 30), footer, font=font_body, fill=(255, 170, 170, 220))
 
     def _build_background(
         self,

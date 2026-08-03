@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +22,54 @@ from api.services.bootstrap import ensure_default_plans
 Path(settings.storage_root).mkdir(parents=True, exist_ok=True)
 
 Base.metadata.create_all(bind=engine)
+
+
+def _print_startup_banner() -> None:
+    """One-shot diagnostic banner so operators can spot misconfiguration
+    before users hit the API."""
+    if os.environ.get("API_DIAGNOSTICS", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return
+
+    hf_token_set = bool(os.environ.get("HF_TOKEN", "").strip())
+    hf_video_model = os.environ.get("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-T2V-A14B")
+    hf_video_provider = os.environ.get("HF_VIDEO_PROVIDER", "fal-ai")
+    hf_text_model = os.environ.get("HF_TEXT_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+    allow_fallback = os.environ.get("HF_ALLOW_LOCAL_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+    cuda_status = "unavailable"
+    try:
+        import torch
+
+        cuda_status = "available" if torch.cuda.is_available() else "unavailable"
+    except Exception:
+        cuda_status = "torch-not-installed"
+
+    ffmpeg_status = "ok" if shutil.which("ffmpeg") or _imageio_ffmpeg_ok() else "missing"
+
+    lines = [
+        "",
+        "================ Movie Flow API ================",
+        f"  Database       : {settings.database_url}",
+        f"  Storage root   : {settings.storage_root}",
+        f"  HF_TOKEN       : {'set' if hf_token_set else 'MISSING — movie pipeline will use local planning; remote video will fail'}",
+        f"  HF text model  : {hf_text_model}",
+        f"  HF video model : {hf_video_model} (provider={hf_video_provider})",
+        f"  Local fallback : {'enabled (placeholder videos when remote fails)' if allow_fallback else 'DISABLED (remote failures will surface as job errors)'}",
+        f"  CUDA           : {cuda_status} (Wan 2.1 1.3B local model requires CUDA)",
+        f"  ffmpeg         : {ffmpeg_status}",
+        "=================================================",
+        "",
+    ]
+    print("\n".join(lines), flush=True)
+
+
+def _imageio_ffmpeg_ok() -> bool:
+    try:
+        import imageio_ffmpeg
+
+        return bool(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        return False
 
 
 def _ensure_sqlite_columns() -> None:
@@ -57,6 +107,7 @@ app.include_router(orgs.router, prefix="/orgs", tags=["orgs"])
 
 @app.on_event("startup")
 def on_startup() -> None:
+    _print_startup_banner()
     db = SessionLocal()
     try:
         ensure_default_plans(db)
@@ -65,5 +116,19 @@ def on_startup() -> None:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "product": "Movie Flow"}
+def health() -> dict:
+    """Liveness probe + diagnostic snapshot so the UI / load balancer can tell
+    whether the API has HF_TOKEN and CUDA wired up correctly."""
+    snapshot: dict = {"status": "ok", "product": "Movie Flow"}
+    snapshot["hf_token"] = "set" if os.environ.get("HF_TOKEN", "").strip() else "missing"
+    snapshot["hf_video_model"] = os.environ.get("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-T2V-A14B")
+    snapshot["hf_video_provider"] = os.environ.get("HF_VIDEO_PROVIDER", "fal-ai")
+    snapshot["local_fallback"] = os.environ.get("HF_ALLOW_LOCAL_FALLBACK", "true")
+    try:
+        import torch
+
+        snapshot["cuda"] = bool(torch.cuda.is_available())
+    except Exception:
+        snapshot["cuda"] = False
+    snapshot["ffmpeg"] = _imageio_ffmpeg_ok() or bool(shutil.which("ffmpeg"))
+    return snapshot
