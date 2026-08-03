@@ -133,6 +133,19 @@ def generate_finetune_video(
 
     loaded_lora = False
     if use_lora and adapter_dir.exists() and (adapter_dir / "adapter_config.json").exists():
+        # Skip adapters trained on a different family (e.g. old CogVideoX run).
+        try:
+            if meta_path.exists():
+                saved = torch.load(meta_path, map_location="cpu", weights_only=False)
+                meta_base = str((saved.get("meta") or {}).get("base_model") or "")
+                if meta_base and not _is_wan_base(meta_base):
+                    if log_fn:
+                        log_fn(f"Skipping LoRA adapter (trained on {meta_base!r}, not Wan)")
+                    use_lora = False
+        except Exception:
+            pass
+
+    if use_lora and adapter_dir.exists() and (adapter_dir / "adapter_config.json").exists():
         try:
             from peft import PeftModel
 

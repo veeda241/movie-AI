@@ -53,10 +53,11 @@ class ImageGenerationConfig:
 @dataclass(frozen=True)
 class VideoGenerationConfig:
     family: ModelFamily = ModelFamily.MOTIF_VIDEO
-    model_id: str = "Wan-AI/Wan2.2-T2V-A14B"
-    provider: str = "fal-ai"
-    num_frames: int = 8
-    num_inference_steps: int = 10
+    # Defaults match .env.example (free HF Inference tier). UI "wan-2.2" overrides to fal.
+    model_id: str = "ali-vilab/text-to-video-ms-1.7b"
+    provider: str = "hf-inference"
+    num_frames: int = 16
+    num_inference_steps: int = 20
     fps: int = 24
     guidance_scale: float = 6.0
     temporal_strategy: str = "video-dit"

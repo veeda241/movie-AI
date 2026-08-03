@@ -29,7 +29,14 @@ class Orchestrator:
         self.cinematographer = CinematographerAgent()
         self.editor = EditorAgent()
         self.video_organizer = VideoOrganizerAgent()
-        self.video_client = MotifClient(output_dir=self.output_dir)
+        # VIDEO_BACKEND: remote (default) | local-wan | local-placeholder
+        self.video_backend = os.environ.get("VIDEO_BACKEND", "remote").strip().lower()
+        movie_ui_model = os.environ.get("MOVIE_VIDEO_MODEL", "").strip() or None
+        self.video_client = MotifClient(
+            output_dir=self.output_dir,
+            force_local=self.video_backend in {"local-placeholder", "placeholder", "motif-local"},
+            ui_model=movie_ui_model,
+        )
         self.image_client = ImageGenerationClient(output_dir=self.output_dir / "images")
         self.last_organizer_output: dict[str, Any] = {}
 
@@ -220,13 +227,54 @@ class Orchestrator:
     ) -> None:
         self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: generating video")
         video_out = self.output_dir / f"scene_{packet.scene_number}_video.mp4"
-        packet.video_path = self.video_client.generate(
-            packet.video_prompt,
-            packet.scene_number,
-            output_path=video_out,
-        )
+        if self.video_backend in {"local-wan", "wan", "wan-2.1-1.3b"}:
+            packet.video_path = self._generate_local_wan_video(
+                packet.video_prompt,
+                packet.scene_number,
+                video_out,
+                progress_callback,
+            )
+        else:
+            packet.video_path = self.video_client.generate(
+                packet.video_prompt,
+                packet.scene_number,
+                output_path=video_out,
+            )
         self._write_scene_packet(packet)
         if packet.video_path:
             self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: saved {packet.video_path}")
         else:
             self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: no video produced")
+
+    def _generate_local_wan_video(
+        self,
+        prompt: str,
+        scene_number: int,
+        out_path: Path,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        """Generate one scene with local Wan2.1-T2V-1.3B (requires CUDA + cached weights)."""
+        import shutil
+
+        def _log(msg: str) -> None:
+            self._emit_progress(progress_callback, msg)
+
+        from video_lab.infer.finetune_generate import generate_finetune_video
+
+        use_lora = os.environ.get("WAN_USE_LORA", "").strip().lower() in {"1", "true", "yes"}
+        wan_path = generate_finetune_video(
+            prompt,
+            seed=seed_from_prompt(prompt, scene_number),
+            steps=int(os.environ.get("WAN_STEPS", "30")),
+            frames=int(os.environ.get("WAN_FRAMES", "81")),
+            fps=int(os.environ.get("WAN_FPS", "16")),
+            height=int(os.environ.get("WAN_HEIGHT", "480")),
+            width=int(os.environ.get("WAN_WIDTH", "832")),
+            use_lora=use_lora,
+            log_fn=_log,
+        )
+        if not wan_path or not Path(wan_path).exists():
+            raise RuntimeError(f"Local Wan returned no file: {wan_path!r}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(wan_path, out_path)
+        return str(out_path)

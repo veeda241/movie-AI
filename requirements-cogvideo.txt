@@ -14,7 +14,7 @@
 # ── Core ML ──────────────────────────────────────────────────────────────────
 torch>=2.0.0                          # PyTorch (CUDA version recommended)
 torchvision                           # PyTorch vision utilities
-diffusers>=0.31.0                     # WanPipeline, AutoencoderKLWan, WanTransformer3DModel
+diffusers>=0.39.0                     # WanPipeline needs scale_factor_* VAE config (0.39+)
 peft>=0.12.0                          # LoRA adapter (PEFT)
 accelerate>=0.30.0                    # Device placement, mixed precision, AMP
 transformers>=4.41.0                  # T5 text encoder for Wan

@@ -12,10 +12,20 @@ from typing import Any, cast
 
 from huggingface_hub import InferenceClient
 
+from movie_pipeline.models.generative_config import VideoGenerationConfig
+
 # When remote HF Inference returns 503 "model is loading", retry a few times
 # with backoff instead of dropping straight to the local fake-video fallback.
 REMOTE_MAX_RETRIES = int(os.environ.get("HF_VIDEO_REMOTE_MAX_RETRIES", "4"))
 REMOTE_RETRY_DELAY_SECONDS = int(os.environ.get("HF_VIDEO_REMOTE_RETRY_DELAY", "15"))
+
+# UI model id → remote provider/model overrides
+UI_MODEL_PRESETS: dict[str, dict[str, str]] = {
+    "wan-2.2": {
+        "provider": "fal-ai",
+        "model_id": "Wan-AI/Wan2.2-T2V-A14B",
+    },
+}
 
 
 def _local_fallback_allowed() -> bool:
@@ -28,22 +38,63 @@ def _local_fallback_allowed() -> bool:
     return flag not in {"0", "false", "no", "off"}
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 class MotifClient:
-    REMOTE_PROVIDER = os.environ.get("HF_VIDEO_PROVIDER", "fal-ai")
-    REMOTE_MODEL = os.environ.get("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-T2V-A14B")
-    REMOTE_NUM_FRAMES = int(os.environ.get("HF_VIDEO_REMOTE_FRAMES", "8"))
-    REMOTE_NUM_INFERENCE_STEPS = int(os.environ.get("HF_VIDEO_REMOTE_STEPS", "10"))
-    REMOTE_TIMEOUT_SECONDS = int(os.environ.get("HF_VIDEO_REMOTE_TIMEOUT", "180"))
+    """Remote text-to-video client (HF Inference / fal-ai) with optional local placeholder."""
 
-    LOCAL_WIDTH = int(os.environ.get("HF_LOCAL_VIDEO_WIDTH", "960"))
-    LOCAL_HEIGHT = int(os.environ.get("HF_LOCAL_VIDEO_HEIGHT", "540"))
-    LOCAL_FPS = int(os.environ.get("HF_LOCAL_VIDEO_FPS", "24"))
-    LOCAL_DURATION_SECONDS = int(os.environ.get("HF_LOCAL_VIDEO_SECONDS", "4"))
+    def __init__(
+        self,
+        output_dir: Path | None = None,
+        *,
+        provider: str | None = None,
+        model_id: str | None = None,
+        num_frames: int | None = None,
+        num_inference_steps: int | None = None,
+        timeout_seconds: int | None = None,
+        force_local: bool = False,
+        ui_model: str | None = None,
+    ) -> None:
+        cfg = VideoGenerationConfig.from_env()
+        preset = UI_MODEL_PRESETS.get((ui_model or "").strip().lower(), {})
 
-    def __init__(self, output_dir: Path | None = None) -> None:
         self.token = os.environ.get("HF_TOKEN", "")
-        self.output_dir = Path(output_dir) if output_dir is not None else Path(__file__).resolve().parents[1] / "output"
+        self.output_dir = (
+            Path(output_dir) if output_dir is not None else Path(__file__).resolve().parents[1] / "output"
+        )
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.remote_provider = provider or preset.get("provider") or cfg.provider
+        self.remote_model = model_id or preset.get("model_id") or cfg.model_id
+        self.remote_num_frames = int(num_frames if num_frames is not None else cfg.num_frames)
+        self.remote_num_inference_steps = int(
+            num_inference_steps if num_inference_steps is not None else cfg.num_inference_steps
+        )
+        self.remote_timeout_seconds = int(
+            timeout_seconds
+            if timeout_seconds is not None
+            else int(os.environ.get("HF_VIDEO_REMOTE_TIMEOUT", "600"))
+        )
+
+        self.force_local = bool(force_local) or _env_bool("HF_FORCE_LOCAL_VIDEO", False)
+        self.local_width = int(os.environ.get("HF_LOCAL_VIDEO_WIDTH", "960"))
+        self.local_height = int(os.environ.get("HF_LOCAL_VIDEO_HEIGHT", "540"))
+        self.local_fps = int(os.environ.get("HF_LOCAL_VIDEO_FPS", str(cfg.fps)))
+        self.local_duration_seconds = int(os.environ.get("HF_LOCAL_VIDEO_SECONDS", "4"))
+
+    # Back-compat aliases used by older call sites / logs
+    @property
+    def REMOTE_PROVIDER(self) -> str:
+        return self.remote_provider
+
+    @property
+    def REMOTE_MODEL(self) -> str:
+        return self.remote_model
 
     def generate(
         self,
@@ -54,6 +105,13 @@ class MotifClient:
     ) -> str:
         target = Path(output_path) if output_path is not None else self.output_dir / f"scene_{scene_number}_video.mp4"
         target.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.force_local:
+            print(
+                f"[MotifClient] scene {scene_number} force_local=True — skipping remote.",
+                flush=True,
+            )
+            return self._generate_local_video(video_prompt, scene_number, target)
 
         last_error: Exception | None = None
         if self.token.strip():
@@ -77,7 +135,7 @@ class MotifClient:
                         continue
                     print(
                         f"[MotifClient] scene {scene_number} remote video failed "
-                        f"(provider={self.REMOTE_PROVIDER} model={self.REMOTE_MODEL}): {exc}",
+                        f"(provider={self.remote_provider} model={self.remote_model}): {exc}",
                         flush=True,
                     )
                     break
@@ -102,16 +160,16 @@ class MotifClient:
 
     def _generate_remote_video(self, video_prompt: str, scene_number: int) -> bytes:
         client = InferenceClient(
-            provider=cast(Any, self.REMOTE_PROVIDER),
+            provider=cast(Any, self.remote_provider),
             api_key=self.token.strip(),
-            timeout=self.REMOTE_TIMEOUT_SECONDS,
+            timeout=self.remote_timeout_seconds,
         )
         seed = self._seed_from_text(video_prompt, scene_number)
         video = client.text_to_video(
             video_prompt,
-            model=self.REMOTE_MODEL,
-            num_frames=self.REMOTE_NUM_FRAMES,
-            num_inference_steps=self.REMOTE_NUM_INFERENCE_STEPS,
+            model=self.remote_model,
+            num_frames=self.remote_num_frames,
+            num_inference_steps=self.remote_num_inference_steps,
             seed=seed,
         )
 
@@ -132,8 +190,8 @@ class MotifClient:
 
         seed = self._seed_from_text(video_prompt, scene_number)
         palette = self._build_palette(seed)
-        background = self._build_background(self.LOCAL_WIDTH + 140, self.LOCAL_HEIGHT + 140, palette)
-        frame_count = self.LOCAL_FPS * self.LOCAL_DURATION_SECONDS
+        background = self._build_background(self.local_width + 140, self.local_height + 140, palette)
+        frame_count = self.local_fps * self.local_duration_seconds
         font_title = self._load_font(28)
         font_body = self._load_font(18)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,9 +209,9 @@ class MotifClient:
             "-pix_fmt",
             "rgb24",
             "-s",
-            f"{self.LOCAL_WIDTH}x{self.LOCAL_HEIGHT}",
+            f"{self.local_width}x{self.local_height}",
             "-r",
-            str(self.LOCAL_FPS),
+            str(self.local_fps),
             "-i",
             "-",
             "-an",
@@ -218,7 +276,7 @@ class MotifClient:
     ) -> Any:
         from PIL import Image, ImageDraw
 
-        width, height = self.LOCAL_WIDTH, self.LOCAL_HEIGHT
+        width, height = self.local_width, self.local_height
         sway_x = int((math.sin(progress * math.tau + (seed % 997) / 97.0) + 1.0) * 0.5 * 70)
         sway_y = int((math.cos(progress * math.tau * 0.85 + (seed % 577) / 83.0) + 1.0) * 0.5 * 70)
         frame = background.crop((sway_x, sway_y, sway_x + width, sway_y + height)).convert("RGBA")

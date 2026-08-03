@@ -11,7 +11,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Load repo-root .env so HF_TOKEN and other secrets reach agents/clients
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_REPO_ROOT / ".env", override=False)
+
+# Windows Downloads folders often block `_regex.pyd`; shim before transformers/diffusers.
+try:
+    import sys
+
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from video_lab.utils.regex_shim import ensure_regex_shim
+
+    ensure_regex_shim()
+except Exception:
+    pass
 
 from api.config import settings
 from api.db import Base, engine, SessionLocal
@@ -31,10 +44,11 @@ def _print_startup_banner() -> None:
         return
 
     hf_token_set = bool(os.environ.get("HF_TOKEN", "").strip())
-    hf_video_model = os.environ.get("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-T2V-A14B")
-    hf_video_provider = os.environ.get("HF_VIDEO_PROVIDER", "fal-ai")
-    hf_text_model = os.environ.get("HF_TEXT_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+    hf_video_model = os.environ.get("HF_VIDEO_MODEL", "ali-vilab/text-to-video-ms-1.7b")
+    hf_video_provider = os.environ.get("HF_VIDEO_PROVIDER", "hf-inference")
+    hf_text_model = os.environ.get("HF_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct")
     allow_fallback = os.environ.get("HF_ALLOW_LOCAL_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off"}
+    video_backend = os.environ.get("VIDEO_BACKEND", "remote")
 
     cuda_status = "unavailable"
     try:
@@ -54,6 +68,7 @@ def _print_startup_banner() -> None:
         f"  HF_TOKEN       : {'set' if hf_token_set else 'MISSING — movie pipeline will use local planning; remote video will fail'}",
         f"  HF text model  : {hf_text_model}",
         f"  HF video model : {hf_video_model} (provider={hf_video_provider})",
+        f"  VIDEO_BACKEND  : {video_backend} (remote | local-wan | local-placeholder)",
         f"  Local fallback : {'enabled (placeholder videos when remote fails)' if allow_fallback else 'DISABLED (remote failures will surface as job errors)'}",
         f"  CUDA           : {cuda_status} (Wan 2.1 1.3B local model requires CUDA)",
         f"  ffmpeg         : {ffmpeg_status}",
@@ -121,8 +136,9 @@ def health() -> dict:
     whether the API has HF_TOKEN and CUDA wired up correctly."""
     snapshot: dict = {"status": "ok", "product": "Movie Flow"}
     snapshot["hf_token"] = "set" if os.environ.get("HF_TOKEN", "").strip() else "missing"
-    snapshot["hf_video_model"] = os.environ.get("HF_VIDEO_MODEL", "Wan-AI/Wan2.2-T2V-A14B")
-    snapshot["hf_video_provider"] = os.environ.get("HF_VIDEO_PROVIDER", "fal-ai")
+    snapshot["hf_video_model"] = os.environ.get("HF_VIDEO_MODEL", "ali-vilab/text-to-video-ms-1.7b")
+    snapshot["hf_video_provider"] = os.environ.get("HF_VIDEO_PROVIDER", "hf-inference")
+    snapshot["video_backend"] = os.environ.get("VIDEO_BACKEND", "remote")
     snapshot["local_fallback"] = os.environ.get("HF_ALLOW_LOCAL_FALLBACK", "true")
     try:
         import torch

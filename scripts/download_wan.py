@@ -21,10 +21,22 @@ removes those markers so the downloader actually retries.
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import os
 import shutil
 import sys
 import time
 from pathlib import Path
+
+ALLOW_PATTERNS = [
+    "text_encoder/*.json",
+    "text_encoder/*.safetensors",
+    "tokenizer/*",
+    "transformer/*",
+    "vae/*",
+    "scheduler/*",
+    "model_index.json",
+]
 
 
 def _try_utf8_stdout() -> None:
@@ -42,11 +54,14 @@ def _human(n: float) -> str:
     return f"{n:.2f} TB"
 
 
-def _cache_dir_for_model(model_id: str) -> Path:
-    from huggingface_hub.constants import HF_HUB_CACHE
+def _matches_allow(path: str) -> bool:
+    return any(fnmatch.fnmatch(path, pat) for pat in ALLOW_PATTERNS)
 
+
+def _cache_dir_for_model(model_id: str) -> Path:
+    cache_root = os.environ.get("HF_HUB_CACHE") or str(Path.home() / ".cache" / "huggingface" / "hub")
     safe = "models--" + model_id.replace("/", "--")
-    return Path(HF_HUB_CACHE) / safe
+    return Path(cache_root) / safe
 
 
 def _clear_no_exist(model_id: str) -> int:
@@ -65,7 +80,7 @@ def _missing_files(model_id: str) -> list[str]:
     from huggingface_hub import HfApi
 
     api = HfApi()
-    remote = set(api.list_repo_files(model_id))
+    remote = {f for f in api.list_repo_files(model_id) if _matches_allow(f)}
     cache = _cache_dir_for_model(model_id) / "snapshots"
     if not cache.exists():
         return sorted(remote)
@@ -73,11 +88,9 @@ def _missing_files(model_id: str) -> list[str]:
     for snap in cache.iterdir():
         for f in snap.rglob("*"):
             if f.is_file() and f.exists():
-                # The snapshot holds symlinks; if the symlink target exists we
-                # treat it as present. The file may live in .no_exist with
-                # the same path; that path is still missing.
                 rel = str(f.relative_to(snap)).replace("\\", "/")
-                present.add(rel)
+                if _matches_allow(rel):
+                    present.add(rel)
     return sorted(remote - present)
 
 
@@ -105,20 +118,17 @@ def _download(model_id: str) -> int:
                 last_bytes = self.n
             return res
 
-    snapshot_download(
-        repo_id=model_id,
-        allow_patterns=[
-            "text_encoder/*.json",
-            "text_encoder/*.safetensors",
-            "tokenizer/*",
-            "transformer/*",
-            "vae/*",
-            "scheduler/*",
-            "model_index.json",
-        ],
-        tqdm_class=_TqdmWrap,
-        max_workers=2,
-    )
+    kwargs: dict = {
+        "repo_id": model_id,
+        "allow_patterns": ALLOW_PATTERNS,
+        "tqdm_class": _TqdmWrap,
+        "max_workers": 2,
+    }
+    cache = os.environ.get("HF_HUB_CACHE")
+    if cache:
+        kwargs["cache_dir"] = cache
+
+    snapshot_download(**kwargs)
     print("Done.")
     return 0
 
@@ -133,8 +143,6 @@ def main() -> int:
     args = p.parse_args()
 
     if args.cache:
-        import os
-
         os.environ["HF_HUB_CACHE"] = args.cache
 
     print(f"Model: {args.model}")
@@ -145,13 +153,13 @@ def main() -> int:
 
     missing = _missing_files(args.model)
     if missing:
-        print(f"\nMissing files ({len(missing)}):")
+        print(f"\nMissing weight files ({len(missing)}):")
         for f in missing[:20]:
             print(f"  - {f}")
         if len(missing) > 20:
             print(f"  … and {len(missing) - 20} more")
     else:
-        print("\nAll files present in cache. Nothing to download.")
+        print("\nAll required weight files present in cache. Nothing to download.")
 
     if args.verify_only:
         return 0 if not missing else 2

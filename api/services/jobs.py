@@ -3,16 +3,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
-# The patched Wan2.1-T2V-1.3B generator lives only in the top-level video_lab/
-# package, not the older copy bundled inside this directory (movie-AI-lab/).
-# Walk up from this file to find the directory containing video_lab/__init__.py
-# and prefer it on sys.path so `import video_lab` resolves to the working Wan
-# pipeline regardless of which copy of the api package is launched.
+# Prefer the repo-root video_lab package (Wan2.1 generator) on sys.path.
 _file_dir = Path(__file__).resolve().parent
 for _candidate in (_file_dir.parents[0], *_file_dir.parents):
-    if (_candidate / "video_lab" / "__init__.py").exists() and not _candidate.name.endswith("movie-AI-lab"):
+    if (_candidate / "video_lab" / "__init__.py").exists():
         if str(_candidate) not in sys.path:
             sys.path.insert(0, str(_candidate))
         break
@@ -26,8 +23,27 @@ from movie_pipeline.models.image_client import ImageGenerationClient
 from movie_pipeline.pipeline.orchestrator import Orchestrator
 from movie_pipeline.video.motif_client import MotifClient
 
-# Model id surfaced in the web UI for the local Wan 2.1 1.3B generator.
+# UI model ids (web/app/app/page.tsx)
 WAN_1_3B_MODEL_ID = "wan-2.1-1.3b"
+WAN_2_2_MODEL_ID = "wan-2.2"
+MOTIF_LOCAL_MODEL_ID = "motif-local"
+
+WAN_ALLOW_PATTERNS = [
+    "text_encoder/*.json",
+    "text_encoder/*.safetensors",
+    "tokenizer/*",
+    "transformer/*",
+    "vae/*",
+    "scheduler/*",
+    "model_index.json",
+]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def project_storage(user_id: str, project_id: str) -> Path:
@@ -158,14 +174,10 @@ def run_image_job(db: Session, job_id: str) -> None:
 
 
 def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
-    """Run the patched local Wan2.1-T2V-1.3B pipeline (`generate_finetune_video`)
-    and write the resulting mp4 to `out_path` (returns the Wan samples path; the
-    caller then copies it into project storage)."""
+    """Run local Wan2.1-T2V-1.3B (`generate_finetune_video`) into `out_path`."""
     import shutil
 
     def _log(msg: str) -> None:
-        # Best-effort DB logger; events land in the same job row so the front-end
-        # progress drawer can show "Loading Wan: ...", "Loaded PEFT LoRA ...", etc.
         try:
             append_job_event(db, job, msg)
         except Exception:
@@ -178,24 +190,20 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
         if not torch.cuda.is_available():
             raise RuntimeError(
                 "CUDA is not available. The local Wan 2.1 1.3B model requires an NVIDIA GPU. "
-                "Pick a different video model (wan-2.2 / motif-local) or run on a CUDA host."
+                "Pick wan-2.2 (remote) or motif-local, or run on a CUDA host."
             )
         _log(f"Pre-flight: CUDA ok ({torch.cuda.get_device_name(0)})")
-    except ImportError:
+    except ImportError as exc:
         raise RuntimeError(
             "PyTorch is not installed. Install requirements-model.txt to use the local Wan model."
-        )
+        ) from exc
 
-    # Lazy import keeps the API light and surfaces clean errors if the user
-    # picks Wan without CUDA / deps installed.
-    from video_lab.infer.finetune_generate import generate_finetune_video
     from video_lab.config import LabConfig
+    from video_lab.infer.finetune_generate import generate_finetune_video
 
     cfg = LabConfig()
     base = cfg.base_t2v_model
 
-    # Wipe stale .no_exist entries so a partial-failed download from a previous
-    # attempt doesn't poison this run (caused the >24h hang we just diagnosed).
     try:
         from huggingface_hub.constants import HF_HUB_CACHE
 
@@ -206,11 +214,10 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
     except Exception as cache_exc:
         _log(f"Cache cleanup skipped: {cache_exc}")
 
-    # Pre-fetch the snapshot with visible per-file progress. Without this the
-    # worker would silently block inside AutoencoderKLWan.from_pretrained etc.
-    # for hours with no progress events.
     try:
         from huggingface_hub import snapshot_download
+
+        last_event = {"t": 0.0}
 
         def _tqdm(msg_callback):
             try:
@@ -221,10 +228,15 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
             class _Wrap(_tqdm_lib):
                 def update(self, n=1.0):  # type: ignore[override]
                     res = super().update(n)
-                    msg_callback(
-                        f"Downloading {self.desc or 'file'}: "
-                        f"{self.n:,}/{self.total:,} bytes ({100 * self.n / max(self.total, 1):.0f}%)"
-                    )
+                    now = time.time()
+                    # Throttle DB spam: at most one progress event every 3s.
+                    if now - last_event["t"] >= 3.0 or self.n >= (self.total or 0):
+                        last_event["t"] = now
+                        msg_callback(
+                            f"Downloading {self.desc or 'file'}: "
+                            f"{self.n:,}/{self.total or 0:,} bytes "
+                            f"({100 * self.n / max(self.total or 1, 1):.0f}%)"
+                        )
                     return res
 
             return _Wrap
@@ -232,15 +244,7 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
         _log(f"Pre-fetching Wan model: {base} (~12 GB on first run)")
         snapshot_download(
             repo_id=base,
-            allow_patterns=[
-                "text_encoder/*.json",
-                "text_encoder/*.safetensors",
-                "tokenizer/*",
-                "transformer/*",
-                "vae/*",
-                "scheduler/*",
-                "model_index.json",
-            ],
+            allow_patterns=WAN_ALLOW_PATTERNS,
             tqdm_class=_tqdm(_log),
             max_workers=2,
         )
@@ -252,8 +256,11 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
         ) from dl_exc
 
     seed = int.from_bytes(job.id.encode("utf-8")[:8], "big") % (2**32)
+    use_lora = _env_bool("WAN_USE_LORA", False)
 
     _log("Building Wan pipeline (loading weights into VRAM)…")
+    if use_lora:
+        _log("WAN_USE_LORA=true — will load LoRA adapter if present")
 
     wan_path = generate_finetune_video(
         job.prompt,
@@ -263,7 +270,7 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
         fps=int(os.environ.get("WAN_FPS", "16")),
         height=int(os.environ.get("WAN_HEIGHT", "480")),
         width=int(os.environ.get("WAN_WIDTH", "832")),
-        use_lora=False,
+        use_lora=use_lora,
         log_fn=_log,
     )
 
@@ -273,6 +280,18 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(wan_path, out_path)
     return str(out_path)
+
+
+def _generate_with_motif(job: Job, out_dir: Path, out_path: Path, clip_index: int) -> str:
+    """Route UI model ids to MotifClient presets."""
+    model = (job.model or "").strip().lower()
+    if model == MOTIF_LOCAL_MODEL_ID:
+        client = MotifClient(output_dir=out_dir / "videos", force_local=True, ui_model=model)
+    elif model == WAN_2_2_MODEL_ID:
+        client = MotifClient(output_dir=out_dir / "videos", ui_model=WAN_2_2_MODEL_ID)
+    else:
+        client = MotifClient(output_dir=out_dir / "videos", ui_model=model or None)
+    return client.generate(job.prompt, scene_number=clip_index, output_path=out_path)
 
 
 def run_video_job(db: Session, job_id: str) -> None:
@@ -309,8 +328,7 @@ def run_video_job(db: Session, job_id: str) -> None:
         if job.model == WAN_1_3B_MODEL_ID:
             path = _generate_with_local_wan(db, job, out_path)
         else:
-            client = MotifClient(output_dir=out_dir / "videos")
-            path = client.generate(job.prompt, scene_number=clip_index, output_path=out_path)
+            path = _generate_with_motif(job, out_dir, out_path, clip_index)
         if not path:
             raise RuntimeError("Video generation produced no file")
         asset = create_asset(
