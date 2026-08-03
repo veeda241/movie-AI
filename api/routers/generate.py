@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from api.auth_utils import get_current_user
 from api.config import settings
-from api.db import SessionLocal, get_db
+from api.db import get_db
 from api.models import JobKind, Project, User
 from api.schemas import (
     AssembleRequest,
@@ -17,6 +17,7 @@ from api.schemas import (
     JobOut,
 )
 from api.services import jobs as job_service
+from api.services.job_runner import submit_job
 
 router = APIRouter()
 
@@ -45,36 +46,9 @@ def _get_project(db: Session, user: User, project_id: str) -> Project:
     return project
 
 
-def _run_in_bg(runner, job_id: str) -> None:
-    import traceback
-
-    from api.models import Job, JobStatus
-    from api.services.jobs import append_job_event, set_job_status
-
-    db = SessionLocal()
-    try:
-        runner(db, job_id)
-    except Exception as exc:
-        # BackgroundTasks in FastAPI does NOT surface worker-thread exceptions
-        # to the API logs reliably. If a job runner crashes *before* it can mark
-        # itself failed, the job would otherwise stay "queued"/"running" forever.
-        # Catch everything here and stamp the job as failed so the UI can recover.
-        try:
-            job = db.get(Job, job_id)
-            if job is not None and job.status in {JobStatus.queued, JobStatus.running}:
-                append_job_event(db, job, f"Worker crashed before completion: {exc}")
-                set_job_status(db, job, JobStatus.failed, f"{exc}\n{traceback.format_exc()[:1500]}")
-        except Exception:
-            pass
-        traceback.print_exc()
-    finally:
-        db.close()
-
-
 @router.post("/image", response_model=JobOut)
 def generate_image(
     body: GenerateImageRequest,
-    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -92,14 +66,13 @@ def generate_image(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)) from exc
-    background.add_task(_run_in_bg, job_service.run_image_job, job.id)
+    submit_job(job_service.run_image_job, job.id)
     return _job_out(job)
 
 
 @router.post("/video", response_model=JobOut)
 def generate_video(
     body: GenerateVideoRequest,
-    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -117,14 +90,13 @@ def generate_video(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)) from exc
-    background.add_task(_run_in_bg, job_service.run_video_job, job.id)
+    submit_job(job_service.run_video_job, job.id)
     return _job_out(job)
 
 
 @router.post("/movie", response_model=JobOut)
 def generate_movie(
     body: GenerateMovieRequest,
-    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -142,14 +114,13 @@ def generate_movie(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)) from exc
-    background.add_task(_run_in_bg, job_service.run_movie_job, job.id)
+    submit_job(job_service.run_movie_job, job.id)
     return _job_out(job)
 
 
 @router.post("/assemble", response_model=JobOut)
 def assemble_clips(
     body: AssembleRequest,
-    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -170,5 +141,5 @@ def assemble_clips(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)) from exc
-    background.add_task(_run_in_bg, job_service.run_assemble_job, job.id)
+    submit_job(job_service.run_assemble_job, job.id)
     return _job_out(job)

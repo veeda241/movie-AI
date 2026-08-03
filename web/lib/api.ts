@@ -172,12 +172,48 @@ export const client = {
 export async function pollJob(
   jobId: string,
   onEvent: (job: Job) => void,
-  intervalMs = 900
+  intervalMs = 1500
 ): Promise<Job> {
+  let consecutiveErrors = 0;
+  let lastJob: Job | null = null;
   for (;;) {
-    const job = await client.jobs.get(jobId);
-    onEvent(job);
-    if (job.status === "succeeded" || job.status === "failed") return job;
+    try {
+      const job = await client.jobs.get(jobId);
+      consecutiveErrors = 0;
+      lastJob = job;
+      onEvent(job);
+      if (job.status === "succeeded" || job.status === "failed") return job;
+    } catch (err) {
+      consecutiveErrors += 1;
+      // Wan load can briefly stall the API; keep polling through transient network errors.
+      if (consecutiveErrors >= 40) {
+        throw err instanceof Error
+          ? err
+          : new Error("Lost connection to API while waiting for job");
+      }
+      const waitMsg = `Waiting for API… (retry ${consecutiveErrors}; GPU jobs can take several minutes)`;
+      if (lastJob) {
+        onEvent({
+          ...lastJob,
+          events: [...lastJob.events, waitMsg],
+        });
+      } else {
+        onEvent({
+          id: jobId,
+          project_id: "",
+          kind: "video",
+          status: "running",
+          prompt: "",
+          model: "",
+          credits_charged: 0,
+          result_asset_ids: [],
+          error: "",
+          events: [waitMsg],
+          created_at: "",
+          updated_at: "",
+        });
+      }
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
 }

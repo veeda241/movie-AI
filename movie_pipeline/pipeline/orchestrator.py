@@ -266,7 +266,7 @@ class Orchestrator:
             prompt,
             seed=seed_from_prompt(prompt, scene_number),
             steps=int(os.environ.get("WAN_STEPS", "30")),
-            frames=int(os.environ.get("WAN_FRAMES", "81")),
+            frames=int(os.environ.get("WAN_FRAMES", "33")),
             fps=int(os.environ.get("WAN_FPS", "16")),
             height=int(os.environ.get("WAN_HEIGHT", "480")),
             width=int(os.environ.get("WAN_WIDTH", "832")),

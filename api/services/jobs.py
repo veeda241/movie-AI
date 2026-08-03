@@ -266,7 +266,8 @@ def _generate_with_local_wan(db: Session, job: Job, out_path: Path) -> str:
         job.prompt,
         seed=seed,
         steps=int(os.environ.get("WAN_STEPS", "30")),
-        frames=int(os.environ.get("WAN_FRAMES", "81")),
+        # 81 frames is native Wan but heavy on 16GB; 33 ≈ 2s @16fps and is 4N+1.
+        frames=int(os.environ.get("WAN_FRAMES", "33")),
         fps=int(os.environ.get("WAN_FPS", "16")),
         height=int(os.environ.get("WAN_HEIGHT", "480")),
         width=int(os.environ.get("WAN_WIDTH", "832")),
