@@ -3,4 +3,5 @@ imageio
 imageio-ffmpeg
 numpy
 Pillow
+requests
 streamlit

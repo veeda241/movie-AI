@@ -1,6 +1,6 @@
 # movie-AI
 
-Python backend for a multiagent movie scene creator that uses Hugging Face text-generation models for scene planning and a routed video pipeline with a local MP4 fallback for scene playback.
+Python backend for a multiagent movie scene creator that uses Hugging Face text-generation models for scene planning and **MiniMax H3** for AI video generation, with a HuggingFace / local MP4 fallback for scene playback.
 
 ## Project Layout
 
@@ -55,7 +55,20 @@ Make sure `HF_TOKEN` is set in the same shell session that launches the app. If 
 
 `HF_TEXT_MODEL` is optional. If you do not set it, the code defaults to `meta-llama/Meta-Llama-3-8B-Instruct`.
 
-Optional video settings:
+MiniMax H3 video generation (recommended – produces real AI videos):
+
+	```powershell
+	$env:MINIMAX_API_KEY = "your-minimax-api-key"
+	$env:MINIMAX_DURATION = "5"           # 4-15 seconds
+	$env:MINIMAX_RESOLUTION = "768P"       # or 2K
+	$env:MINIMAX_RATIO = "16:9"
+	```
+
+Get your API key from [platform.minimax.io](https://platform.minimax.io). MiniMax H3
+is the default video provider when `MINIMAX_API_KEY` is set. If unset or on failure,
+the pipeline automatically falls back to HuggingFace routed video or a local MP4 stub.
+
+Optional HuggingFace video fallback:
 
 	```powershell
 	$env:HF_VIDEO_PROVIDER = "fal-ai"

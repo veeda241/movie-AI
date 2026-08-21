@@ -1,6 +1,7 @@
 from movie_pipeline.models.generative_config import (
     FineTuneConfig,
     ImageGenerationConfig,
+    MiniMaxH3Config,
     ModelFamily,
     VideoGenerationConfig,
 )
@@ -10,6 +11,7 @@ __all__ = [
     "FineTuneConfig",
     "ImageGenerationClient",
     "ImageGenerationConfig",
+    "MiniMaxH3Config",
     "ModelFamily",
     "VideoGenerationConfig",
 ]

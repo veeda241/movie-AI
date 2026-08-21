@@ -12,6 +12,7 @@ class ModelFamily(StrEnum):
     ANIMATEDIFF = "animatediff"
     COGVIDEOX = "cogvideox"
     MOTIF_VIDEO = "motif-video"
+    MINIMAX_H3 = "minimax-h3"
 
 
 @dataclass(frozen=True)
@@ -49,10 +50,39 @@ class ImageGenerationConfig:
 
 
 @dataclass(frozen=True)
+class MiniMaxH3Config:
+    """Configuration for MiniMax H3 video generation via the MiniMax platform API."""
+
+    model_name: str = "MiniMax-H3"
+    base_url: str = "https://api.minimax.io"
+    duration: int = 5
+    resolution: str = "768P"
+    ratio: str = "16:9"
+    poll_interval: int = 10
+    max_poll_attempts: int = 60
+    request_timeout: int = 30
+    output_dir: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[1] / "output"
+    )
+
+    @classmethod
+    def from_env(cls) -> "MiniMaxH3Config":
+        return cls(
+            base_url=os.environ.get("MINIMAX_API_BASE", cls.base_url),
+            duration=int(os.environ.get("MINIMAX_DURATION", str(cls.duration))),
+            resolution=os.environ.get("MINIMAX_RESOLUTION", cls.resolution),
+            ratio=os.environ.get("MINIMAX_RATIO", cls.ratio),
+            poll_interval=int(os.environ.get("MINIMAX_POLL_INTERVAL", str(cls.poll_interval))),
+            max_poll_attempts=int(os.environ.get("MINIMAX_MAX_POLL_ATTEMPTS", str(cls.max_poll_attempts))),
+            request_timeout=int(os.environ.get("MINIMAX_REQUEST_TIMEOUT", str(cls.request_timeout))),
+        )
+
+
+@dataclass(frozen=True)
 class VideoGenerationConfig:
-    family: ModelFamily = ModelFamily.MOTIF_VIDEO
-    model_id: str = "Wan-AI/Wan2.2-T2V-A14B"
-    provider: str = "fal-ai"
+    family: ModelFamily = ModelFamily.MINIMAX_H3
+    model_id: str = "MiniMax-H3"
+    provider: str = "minimax"
     num_frames: int = 8
     num_inference_steps: int = 10
     fps: int = 24
@@ -64,10 +94,20 @@ class VideoGenerationConfig:
 
     @classmethod
     def from_env(cls) -> "VideoGenerationConfig":
+        minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
+        if minimax_key:
+            default_family = ModelFamily.MINIMAX_H3
+            default_model = "MiniMax-H3"
+            default_provider = "minimax"
+        else:
+            default_family = ModelFamily.MOTIF_VIDEO
+            default_model = "Wan-AI/Wan2.2-T2V-A14B"
+            default_provider = "fal-ai"
+
         return cls(
-            family=ModelFamily(os.environ.get("VIDEO_MODEL_FAMILY", cls.family.value)),
-            model_id=os.environ.get("HF_VIDEO_MODEL", cls.model_id),
-            provider=os.environ.get("HF_VIDEO_PROVIDER", cls.provider),
+            family=ModelFamily(os.environ.get("VIDEO_MODEL_FAMILY", default_family.value)),
+            model_id=os.environ.get("HF_VIDEO_MODEL", default_model),
+            provider=os.environ.get("HF_VIDEO_PROVIDER", default_provider),
             num_frames=int(os.environ.get("HF_VIDEO_REMOTE_FRAMES", str(cls.num_frames))),
             num_inference_steps=int(
                 os.environ.get("HF_VIDEO_REMOTE_STEPS", str(cls.num_inference_steps))

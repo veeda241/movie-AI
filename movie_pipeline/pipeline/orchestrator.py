@@ -15,6 +15,7 @@ from movie_pipeline.agents.video_organizer import VideoOrganizerAgent
 from movie_pipeline.models.image_client import ImageGenerationClient, seed_from_prompt
 from movie_pipeline.models.prompt_conditioning import build_image_prompt, build_video_prompt
 from movie_pipeline.pipeline.scene_packet import ScenePacket
+from movie_pipeline.video.minimax_client import MiniMaxH3Client
 from movie_pipeline.video.motif_client import MotifClient
 
 
@@ -29,6 +30,7 @@ class Orchestrator:
         self.cinematographer = CinematographerAgent()
         self.editor = EditorAgent()
         self.video_organizer = VideoOrganizerAgent()
+        self.minimax_client = MiniMaxH3Client()
         self.video_client = MotifClient()
         self.image_client = ImageGenerationClient()
         self.last_organizer_output: dict[str, Any] = {}
@@ -217,9 +219,36 @@ class Orchestrator:
         progress_callback: Callable[[str], None] | None = None,
     ) -> None:
         self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: generating video")
-        packet.video_path = self.video_client.generate(packet.video_prompt, packet.scene_number)
+
+        # Try MiniMax H3 first, then fall back to HuggingFace / local MotifClient
+        video_path = ""
+        if self.minimax_client.available:
+            self._emit_progress(
+                progress_callback,
+                f"[Video] Scene {packet.scene_number}: trying MiniMax H3",
+            )
+            video_path = self.minimax_client.generate(
+                packet.video_prompt, packet.scene_number
+            )
+
+        if not video_path:
+            self._emit_progress(
+                progress_callback,
+                f"[Video] Scene {packet.scene_number}: falling back to Motif/HF",
+            )
+            video_path = self.video_client.generate(
+                packet.video_prompt, packet.scene_number
+            )
+
+        packet.video_path = video_path
         self._write_scene_packet(packet)
         if packet.video_path:
-            self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: saved {packet.video_path}")
+            self._emit_progress(
+                progress_callback,
+                f"[Video] Scene {packet.scene_number}: saved {packet.video_path}",
+            )
         else:
-            self._emit_progress(progress_callback, f"[Video] Scene {packet.scene_number}: no video produced")
+            self._emit_progress(
+                progress_callback,
+                f"[Video] Scene {packet.scene_number}: no video produced",
+            )

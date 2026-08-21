@@ -11,7 +11,7 @@ from movie_pipeline.pipeline.orchestrator import Orchestrator
 from movie_pipeline.pipeline.scene_packet import ScenePacket
 
 APP_TITLE = "Movie AI Studio"
-APP_SUBTITLE = "Plan scenes with Hugging Face agents and render video stubs with Motif-Video-2B."
+APP_SUBTITLE = "Plan scenes with Hugging Face agents and render video with MiniMax H3 (fallback to Motif/HF)."
 
 
 def _ensure_state() -> None:
@@ -29,6 +29,7 @@ def _ensure_state() -> None:
 
 def _missing_env_vars() -> list[str]:
     required_vars = ["HF_TOKEN"]
+    optional_vars = ["MINIMAX_API_KEY"]
     return [name for name in required_vars if not os.environ.get(name)]
 
 
@@ -111,12 +112,18 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Pipeline")
-        st.write("Enter a movie idea, run the Hugging Face agent chain, and inspect each generated scene packet.")
-        st.write("Environment variables required:")
-        st.code("HF_TOKEN")
+        st.write("Enter a movie idea, run the agent chain, and inspect each generated scene packet.")
+        st.write("Environment variables:")
+        st.code("HF_TOKEN  (required for text agents)")
+        st.code("MINIMAX_API_KEY  (optional – enables MiniMax H3 video)")
         missing_env_vars = _missing_env_vars()
         if missing_env_vars:
             st.warning(f"Missing environment variables: {', '.join(missing_env_vars)}")
+        minimax_available = bool(os.environ.get("MINIMAX_API_KEY", "").strip())
+        if minimax_available:
+            st.success("MiniMax H3 video generation: enabled")
+        else:
+            st.info("Set MINIMAX_API_KEY to enable MiniMax H3 video generation.")
         if st.button("Clear results", use_container_width=True):
             st.session_state.scene_packets = []
             st.session_state.organizer_output = {}
