@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     credit_cost_assemble: int = 1
     starter_monthly_credits: int = 500
     pro_monthly_credits: int = 2000
-    free_signup_credits: int = 50
+    free_signup_credits: int = 2000
 
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

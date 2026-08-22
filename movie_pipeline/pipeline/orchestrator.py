@@ -235,10 +235,12 @@ class Orchestrator:
                 progress_callback,
             )
         else:
+            first_frame = packet.image_path or None
             packet.video_path = self.video_client.generate(
                 packet.video_prompt,
                 packet.scene_number,
                 output_path=video_out,
+                first_frame_image=first_frame,
             )
         self._write_scene_packet(packet)
         if packet.video_path:

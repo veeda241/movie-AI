@@ -3,7 +3,7 @@ imageio
 imageio-ffmpeg
 numpy
 Pillow
-streamlit
+requests
 fastapi
 uvicorn[standard]
 sqlalchemy

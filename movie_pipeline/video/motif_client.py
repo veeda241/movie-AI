@@ -12,7 +12,7 @@ from typing import Any, cast
 
 from huggingface_hub import InferenceClient
 
-from movie_pipeline.models.generative_config import VideoGenerationConfig
+from movie_pipeline.models.generative_config import MiniMaxH3Config, VideoGenerationConfig
 
 # When remote HF Inference returns 503 "model is loading", retry a few times
 # with backoff instead of dropping straight to the local fake-video fallback.
@@ -24,6 +24,10 @@ UI_MODEL_PRESETS: dict[str, dict[str, str]] = {
     "wan-2.2": {
         "provider": "fal-ai",
         "model_id": "Wan-AI/Wan2.2-T2V-A14B",
+    },
+    "minimax-h3": {
+        "provider": "minimax",
+        "model_id": "MiniMax-H3",
     },
 }
 
@@ -87,6 +91,14 @@ class MotifClient:
         self.local_fps = int(os.environ.get("HF_LOCAL_VIDEO_FPS", str(cfg.fps)))
         self.local_duration_seconds = int(os.environ.get("HF_LOCAL_VIDEO_SECONDS", "4"))
 
+        # MiniMax H3 integration: activated when MINIMAX_API_KEY is set
+        self.minimax_client: Any | None = None
+        minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
+        if minimax_key and self.remote_provider == "minimax":
+            from movie_pipeline.video.minimax_client import MiniMaxClient
+
+            self.minimax_client = MiniMaxClient(output_dir=self.output_dir)
+
     # Back-compat aliases used by older call sites / logs
     @property
     def REMOTE_PROVIDER(self) -> str:
@@ -102,6 +114,7 @@ class MotifClient:
         scene_number: int,
         *,
         output_path: str | Path | None = None,
+        first_frame_image: str | Path | None = None,
     ) -> str:
         target = Path(output_path) if output_path is not None else self.output_dir / f"scene_{scene_number}_video.mp4"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +126,27 @@ class MotifClient:
             )
             return self._generate_local_video(video_prompt, scene_number, target)
 
+        # --- MiniMax H3 path (preferred when MINIMAX_API_KEY is set) ---
+        if self.minimax_client is not None:
+            try:
+                return self.minimax_client.generate(
+                    video_prompt,
+                    scene_number,
+                    output_path=target,
+                    first_frame_image=first_frame_image,
+                )
+            except Exception as exc:
+                print(
+                    f"[MotifClient] scene {scene_number} MiniMax H3 failed: {exc}",
+                    flush=True,
+                )
+                if not _local_fallback_allowed():
+                    raise RuntimeError(
+                        f"MiniMax H3 failed and HF_ALLOW_LOCAL_FALLBACK=false: {exc}"
+                    ) from exc
+                # Fall through to HF / local placeholder below
+
+        # --- HuggingFace Inference / fal-ai path ---
         last_error: Exception | None = None
         if self.token.strip():
             for attempt in range(1, REMOTE_MAX_RETRIES + 1):

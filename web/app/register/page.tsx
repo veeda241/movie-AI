@@ -35,7 +35,7 @@ export default function RegisterPage() {
           Movie Flow
         </Link>
         <h1 className="text-lg text-mist-200">Create your studio account</h1>
-        <p className="text-sm text-mist-400">Includes {50} free credits to start generating.</p>
+        <p className="text-sm text-mist-400">Includes {2000} free credits to start generating.</p>
         {error && <p className="text-sm text-red-300">{error}</p>}
         <input
           className="w-full rounded-xl border border-white/10 bg-ink-950 px-4 py-3 outline-none focus:border-tungsten-500"

@@ -144,12 +144,6 @@ npm run dev
 
 Open **http://localhost:3000**
 
-### C) Streamlit ops monitor (optional)
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py
-```
-
 ---
 
 ## 5. Lab data + train (CLI)
@@ -215,7 +209,6 @@ web/                 Movie Flow Next.js UI
 movie_pipeline/      Multi-agent planning + Motif video client
 video_lab/           Own VAE/DiT models, train, infer, Gradio UI
 gradio_video_lab.py  Lab launcher (:7860)
-streamlit_app.py     Ops monitor
 scripts/             download_pexels, download_hf_wan_actions, train_niche, train_lora
 docs/                Lab + niche guides
 data/video_lab/      Local clips + manifests (gitignored)
